@@ -383,12 +383,12 @@ async function buildP1() {
   // --- KPIs ---
   console.log(`[P1] Final KPI values: leads7d=${leads7d}, mql7d=${mql7d}, leads7dPrev=${leads7dPrev}, mql7dPrev=${mql7dPrev}`);
   const kpis = [
-    { label: 'Leads (7D)', value: leads7d, delta: pct(leads7d, leads7dPrev), format: 'number' },
-    { label: 'MQL (7D)', value: mql7d, delta: pct(mql7d, mql7dPrev), format: 'number' },
-    { label: 'Reunião (7D)', value: reuniao7d, delta: pct(reuniao7d, reuniaoPrev), format: 'number' },
-    { label: 'Investimento (7D)', value: spend7d, delta: pct(spend7d, spend7dPrev), format: 'currency' },
-    { label: 'Custo/Lead (7D)', value: costPerLead7d, delta: pct(costPerLead7d, costPerLeadPrev), format: 'currency', invertDelta: true },
-    { label: 'Custo/MQL (7D)', value: costPerMQL7d, delta: pct(costPerMQL7d, costPerMQLPrev), format: 'currency', invertDelta: true }
+    { label: 'Leads', value: leads7d, delta: pct(leads7d, leads7dPrev), format: 'number' },
+    { label: 'MQL', value: mql7d, delta: pct(mql7d, mql7dPrev), format: 'number' },
+    { label: 'Reunião', value: reuniao7d, delta: pct(reuniao7d, reuniaoPrev), format: 'number' },
+    { label: 'Investimento', value: spend7d, delta: pct(spend7d, spend7dPrev), format: 'currency' },
+    { label: 'Custo/Lead', value: costPerLead7d, delta: pct(costPerLead7d, costPerLeadPrev), format: 'currency', invertDelta: true },
+    { label: 'Custo/MQL', value: costPerMQL7d, delta: pct(costPerMQL7d, costPerMQLPrev), format: 'currency', invertDelta: true }
   ];
 
   // --- Gráfico 1: Leads e MQL diários últimos 30d ---

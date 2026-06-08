@@ -340,9 +340,9 @@ function renderKPIs(kpis) {
       const isPos = inv ? k.delta <= 0 : k.delta >= 0;
       const cls = isPos ? 'pos' : 'neg';
       const arrow = k.delta >= 0 ? '▲' : '▼';
-      deltaHtml = `<div class="kpi-delta ${cls}">${arrow} ${Math.abs(k.delta)}% vs mês ant.</div>`;
+      deltaHtml = `<div class="kpi-delta ${cls}">${arrow} ${Math.abs(k.delta)}% MoM</div>`;
     } else {
-      deltaHtml = `<div class="kpi-delta neutral">— sem dados ant.</div>`;
+      deltaHtml = `<div class="kpi-delta neutral">— sem dados MoM</div>`;
     }
     return `<div class="kpi-card">
       <div class="kpi-label">${k.label}</div>
