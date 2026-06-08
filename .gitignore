@@ -22,6 +22,9 @@ count-by-period.js
 p1_data.json
 p1_export.json
 
+# Claude Code (configurações locais)
+.claude/
+
 # Sistema operacional
 .DS_Store
 Thumbs.db
