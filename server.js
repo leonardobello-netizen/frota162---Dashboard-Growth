@@ -904,8 +904,15 @@ app.get('/api/p1/kpis', async (req, res) => {
 
 app.get('/api/p2', async (req, res) => {
   try {
-    const data = await withCache('p2', buildP2);
-    res.json(data);
+    if (MEM_CACHE['p2'] && MEM_CACHE['p2'].data) {
+      return res.json(MEM_CACHE['p2'].data);
+    }
+    const disk = readDiskCache('p2');
+    if (disk) {
+      MEM_CACHE['p2'] = { ts: Date.now(), data: disk };
+      return res.json(disk);
+    }
+    return res.status(202).json({ loading: true, message: 'Dados sendo carregados do HubSpot, tente novamente em 30 segundos.' });
   } catch (e) {
     console.error('P2 error:', e.message);
     res.status(500).json({ error: e.message });

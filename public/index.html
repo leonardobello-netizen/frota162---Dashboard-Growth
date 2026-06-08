@@ -535,9 +535,28 @@ function renderCampTable(rows) {
 // ── P2 ───────────────────────────────────────────────────────
 async function loadP2() {
   try {
-    const res = await fetch('/api/p2');
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const data = await res.json();
+    let data = null;
+    let attempts = 0;
+    const MAX_ATTEMPTS = 20;
+    while (!data && attempts < MAX_ATTEMPTS) {
+      attempts++;
+      const res = await fetch('/api/p2');
+      if (res.status === 202) {
+        console.log(`[DEBUG] P2 loading... tentativa ${attempts}/${MAX_ATTEMPTS}`);
+        const effWrap = document.getElementById('chart-efficiency-wrap');
+        if (effWrap) effWrap.innerHTML = `<div style="color:#63b3ed;padding:24px;text-align:center">
+          <div style="font-size:1.5rem;margin-bottom:8px">⏳</div>
+          <div style="font-weight:600;margin-bottom:4px">Carregando dados do HubSpot...</div>
+          <div style="font-size:0.8rem;color:#718096">Primeira carga leva ~2 minutos. Tentativa ${attempts}/${MAX_ATTEMPTS}.</div>
+        </div>`;
+        reveal('sec-efficiency');
+        await new Promise(r => setTimeout(r, 20000));
+        continue;
+      }
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      data = await res.json();
+    }
+    if (!data) throw new Error('Dados P2 não disponíveis após ' + MAX_ATTEMPTS + ' tentativas.');
 
     await nextFrame();
     renderEfficiencyChart(data.g12);
