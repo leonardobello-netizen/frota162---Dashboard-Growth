@@ -481,7 +481,7 @@ async function loadCampTable(groupBy) {
   wrap.className = 'table-card';
   wrap.innerHTML = `
     <div class="table-header">
-      <span style="font-size:0.85rem;font-weight:600">Google Ads — 2026</span>
+      <span style="font-size:0.85rem;font-weight:600">Google Ads — últimos 30 dias</span>
       <div style="display:flex;gap:6px;margin-left:16px">
         <button onclick="loadCampTable('campaign')" class="toggle-btn ${groupBy==='campaign'?'active':''}" id="btn-camp-campaign">Campanha</button>
         <button onclick="loadCampTable('adgroup')"  class="toggle-btn ${groupBy==='adgroup' ?'active':''}" id="btn-camp-adgroup">Ad Group</button>
@@ -493,6 +493,9 @@ async function loadCampTable(groupBy) {
   try {
     const res  = await fetch('/api/p1/campaigns-enriched?groupBy=' + groupBy);
     const data = await res.json();
+    if (!res.ok || data.error) {
+      throw new Error(data.error || `HTTP ${res.status}`);
+    }
     const rows = data.campaigns || [];
 
     const LABELS = { campaign: 'Campanha', adgroup: 'Ad Group', keyword: 'Keyword' };
@@ -516,7 +519,7 @@ async function loadCampTable(groupBy) {
 
     wrap.innerHTML = `
       <div class="table-header">
-        <span style="font-size:0.85rem;font-weight:600">Google Ads — 2026</span>
+        <span style="font-size:0.85rem;font-weight:600">Google Ads — últimos 30 dias</span>
         <div style="display:flex;gap:6px;margin-left:16px">
           <button onclick="loadCampTable('campaign')" class="toggle-btn ${'campaign'===groupBy?'active':''}">Campanha</button>
           <button onclick="loadCampTable('adgroup')"  class="toggle-btn ${'adgroup' ===groupBy?'active':''}">Ad Group</button>

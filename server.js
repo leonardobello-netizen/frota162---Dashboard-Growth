@@ -755,10 +755,6 @@ async function buildCampaignsEnriched(groupBy = 'campaign') {
     console.log(`[buildCampaignsEnriched] cache HIT: ${groupBy}`);
     return memCache[cacheKey];
   }
-  // Invalida cache antigo (janela mudou para 30d)
-  delete memCache[cacheKey];
-  delete memCache[tsKey];
-
   // Mapeia groupBy para coluna real na tabela (nomes padrão Google Ads export)
   const GROUP_COL = {
     campaign: 'campaign_name',
@@ -768,26 +764,31 @@ async function buildCampaignsEnriched(groupBy = 'campaign') {
   const col = GROUP_COL[groupBy] || 'campaign_name';
 
   // Para adgroup e keyword inclui campaign_name como coluna extra (contexto)
-  const extraCol = groupBy !== 'campaign' ? `, campaign_name` : '';
+  const extraColSelect = groupBy !== 'campaign' ? `, campaign_name` : '';
+  const extraColGroup  = groupBy !== 'campaign' ? `, campaign_name` : '';
 
-  const cutoff30 = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  // Usa date_add nativo do Athena para evitar problemas de tipo com TIMESTAMP vs DATE
   const sql = `
     SELECT
-      ${col}${extraCol},
+      ${col}${extraColSelect},
       SUM(cost_brl)    AS spend,
       SUM(conversions) AS conversions,
       SUM(clicks)      AS clicks
     FROM data_analytics.google_campaigns
-    WHERE date >= TIMESTAMP '${toYMD(cutoff30)} 00:00:00'
-    GROUP BY ${col}${extraCol}
+    WHERE date >= date_add('day', -30, current_date)
+    GROUP BY ${col}${extraColGroup}
     ORDER BY spend DESC
   `;
+
+  console.log(`[buildCampaignsEnriched] Executando query (${groupBy}):`, sql.trim().split('\n')[3]);
 
   try {
     const metabaseRes = await Promise.race([
       metabaseQuery(sql),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('Metabase timeout')), 20000))
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Metabase timeout 30s')), 30000))
     ]);
+
+    console.log(`[buildCampaignsEnriched] Metabase retornou ${metabaseRes.rows.length} linhas para ${groupBy}`);
 
     // Índices dependem se há coluna extra ou não
     const hasExtra = groupBy !== 'campaign';
@@ -813,8 +814,9 @@ async function buildCampaignsEnriched(groupBy = 'campaign') {
     memCache[tsKey]    = Date.now();
     return rows;
   } catch (err) {
-    console.error(`[buildCampaignsEnriched] Erro (${groupBy}):`, err.message);
-    return [];
+    console.error(`[buildCampaignsEnriched] ERRO (${groupBy}):`, err.message);
+    // Retorna erro para o endpoint poder sinalizar ao frontend
+    throw err;
   }
 }
 
