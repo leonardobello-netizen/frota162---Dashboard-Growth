@@ -250,7 +250,7 @@ async function buildP1() {
         { propertyName: 'createdate', operator: 'GTE', value: String(d30ago.getTime()) },
         { propertyName: 'createdate', operator: 'LTE', value: String(today.getTime()) }
       ]}],
-      properties: ['createdate', 'dealname', 'sub_origem']
+      properties: ['createdate', 'dealname', 'sub_origem', 'dealstage']
     }),
     // 2. MQL 30d (Meta Ads)
     hsSearchAll('deals', {
@@ -262,9 +262,10 @@ async function buildP1() {
       ]}],
       properties: ['createdate', 'sub_origem']
     }),
-    // 3. Frota 90d — query única (antes eram duas queries idênticas)
+    // 3. Frota 90d — Google Ads apenas
     hsSearchAll('deals', {
       filterGroups: [{ filters: [
+        { propertyName: 'sub_origem',  operator: 'EQ',  value: SUB_ORIGEM_GOOGLE },
         { propertyName: 'createdate', operator: 'GTE', value: String(d90ago.getTime()) }
       ]}],
       properties: ['createdate', 'dealname', 'qual_a_quantidade_de_veiculos_na_sua_frota_']
@@ -298,10 +299,10 @@ async function buildP1() {
   const mqlDealsRaw = mqlDealsRes || [];
 
   // Build daily maps
-  const dailyLeads = {}; // date -> count (all deals)
-  const dailyMQL = {};   // date -> count (Meta Ads deals)
-  const dailyDriva = {}; // date -> count (Driva imports)
-  const dailySpend = {}; // date -> spend
+  const dailyLeads = {};     // date -> count (Google Ads deals)
+  const dailyMQL = {};       // date -> count (Meta Ads deals, for KPI)
+  const dailyGoogleMQL = {}; // date -> count (Google Ads + stage Reunião, for chart)
+  const dailySpend = {};     // date -> spend
 
   // D-1 cutoff date
   const yesterday = toYMD(today);
@@ -314,13 +315,13 @@ async function buildP1() {
     const dt = toYMD(new Date(d.properties.createdate));
     if (!dt || dt > yesterday) return;
     const subOrigem = d.properties.sub_origem || '';
-    // Leads = sub_origem Google Ads (D-1, últimos 7D)
+    // Leads = sub_origem Google Ads
     if (subOrigem === SUB_ORIGEM_GOOGLE) {
       dailyLeads[dt] = (dailyLeads[dt] || 0) + 1;
-    }
-    // Driva detection (para flags no gráfico de volume)
-    if (subOrigem.toLowerCase().includes('driva')) {
-      dailyDriva[dt] = (dailyDriva[dt] || 0) + 1;
+      // Google Ads qualificados (stage Reunião) para barra verde do gráfico de volume
+      if (d.properties.dealstage === STAGE_REUNIAO) {
+        dailyGoogleMQL[dt] = (dailyGoogleMQL[dt] || 0) + 1;
+      }
     }
   });
 
@@ -359,25 +360,24 @@ async function buildP1() {
     return s;
   }
 
-  // addDays(today,1) = inclui o próprio D-1 no total (sumRange usa cur < to)
-  const d7agoKPI = addDays(today, -6); // janela exata de 7 dias terminando em D-1
-  const leads7d = sumRange(dailyLeads, d7agoKPI, addDays(today, 1), 'Leads(7D)');
-  const mql7d   = sumRange(dailyMQL,   d7agoKPI, addDays(today, 1), 'MQL(7D)');
-  const spend7d  = sumRange(dailySpend, d7agoKPI, addDays(today, 1));
-  // Dynamic comparison: monthStart-today vs monthStartPrev-sameday
-  const leads7dPrev = sumRange(dailyLeads, monthStartPrev, addDays(datePrev, 1));
-  const mql7dPrev = sumRange(dailyMQL, monthStartPrev, addDays(datePrev, 1));
-  const spend7dPrev = sumRange(dailySpend, monthStartPrev, addDays(datePrev, 1));
+  // MTD: do início do mês até D-1
+  const leadsMTD  = sumRange(dailyLeads, monthStart,     addDays(today, 1), 'Leads(MTD)');
+  const mqlMTD    = sumRange(dailyMQL,   monthStart,     addDays(today, 1), 'MQL(MTD)');
+  const spendMTD  = sumRange(dailySpend, monthStart,     addDays(today, 1));
+  // LMTD: mesmo período do mês anterior
+  const leadsPrev = sumRange(dailyLeads, monthStartPrev, addDays(datePrev, 1));
+  const mqlPrev   = sumRange(dailyMQL,   monthStartPrev, addDays(datePrev, 1));
+  const spendPrev = sumRange(dailySpend, monthStartPrev, addDays(datePrev, 1));
 
   function pct(cur, prev) {
     if (!prev) return null;
     return Math.round(((cur - prev) / prev) * 100);
   }
 
-  const costPerLead7d = leads7d ? spend7d / leads7d : 0;
-  const costPerMQL7d = mql7d ? spend7d / mql7d : 0;
-  const costPerLeadPrev = leads7dPrev ? spend7dPrev / leads7dPrev : 0;
-  const costPerMQLPrev = mql7dPrev ? spend7dPrev / mql7dPrev : 0;
+  const costPerLead7d = leadsMTD ? spendMTD / leadsMTD : 0;
+  const costPerMQL7d = mqlMTD ? spendMTD / mqlMTD : 0;
+  const costPerLeadPrev = leadsPrev ? spendPrev / leadsPrev : 0;
+  const costPerMQLPrev = mqlPrev ? spendPrev / mqlPrev : 0;
 
   const reuniao7d = reunioesRaw.length;
   const reunioesPrevRaw = (reunioesPrevRes && reunioesPrevRes.results) ? reunioesPrevRes.results : (Array.isArray(reunioesPrevRes) ? reunioesPrevRes : []);
@@ -385,12 +385,12 @@ async function buildP1() {
   console.log(`[P1] Reuniões — 7D: ${reuniao7d} | anterior: ${reuniaoPrev}`);
 
   // --- KPIs ---
-  console.log(`[P1] Final KPI values: leads7d=${leads7d}, mql7d=${mql7d}, leads7dPrev=${leads7dPrev}, mql7dPrev=${mql7dPrev}`);
+  console.log(`[P1] Final KPI values: leadsMTD=${leadsMTD}, mqlMTD=${mqlMTD}, leadsPrev=${leadsPrev}, mqlPrev=${mqlPrev}`);
   const kpis = [
-    { label: 'Leads', value: leads7d, delta: pct(leads7d, leads7dPrev), format: 'number' },
-    { label: 'MQL', value: mql7d, delta: pct(mql7d, mql7dPrev), format: 'number' },
+    { label: 'Leads', value: leadsMTD, delta: pct(leadsMTD, leadsPrev), format: 'number' },
+    { label: 'MQL', value: mqlMTD, delta: pct(mqlMTD, mqlPrev), format: 'number' },
     { label: 'Reunião', value: reuniao7d, delta: pct(reuniao7d, reuniaoPrev), format: 'number' },
-    { label: 'Investimento', value: spend7d, delta: pct(spend7d, spend7dPrev), format: 'currency' },
+    { label: 'Investimento', value: spendMTD, delta: pct(spendMTD, spendPrev), format: 'currency' },
     { label: 'Custo/Lead', value: costPerLead7d, delta: pct(costPerLead7d, costPerLeadPrev), format: 'currency', invertDelta: true },
     { label: 'Custo/MQL', value: costPerMQL7d, delta: pct(costPerMQL7d, costPerMQLPrev), format: 'currency', invertDelta: true }
   ];
@@ -405,7 +405,7 @@ async function buildP1() {
     const d = toYMD(addDays(today, -i));
     g1Labels.push(d);
     g1Leads.push(dailyLeads[d] || 0);
-    g1MQL.push(dailyMQL[d] || 0);
+    g1MQL.push(dailyGoogleMQL[d] || 0);
   }
 
   // Calculate 7-day moving averages for both Leads and MQL
@@ -537,14 +537,7 @@ async function buildP1() {
     }))
     .sort((a, b) => b.spend - a.spend);
 
-  const mqlKPI = kpis.find(k => k.label === 'MQL (7D)');
-  console.log(`[buildP1] RETURNING MQL KPI:`, JSON.stringify(mqlKPI));
-  console.log(`[buildP1] g1MQL (first 10 values):`, g1MQL.slice(0, 10));
-
-  // Flags de importação Driva: dias com >5 deals Driva no período do gráfico
-  const drivaFlags = g1Labels
-    .map((date, i) => ({ date, count: dailyDriva[date] || 0, index: i }))
-    .filter(f => f.count > 5);
+  console.log(`[buildP1] g1MQL (Google Ads Reunião, first 10 values):`, g1MQL.slice(0, 10));
 
   const result = {
     kpis,
@@ -553,8 +546,7 @@ async function buildP1() {
       leads: g1Leads,
       mql: g1MQL,
       mm7Leads: g1MM7Leads,
-      mm7MQL: g1MM7MQL,
-      drivaFlags
+      mm7MQL: g1MM7MQL
     },
     g2,
     g3: { labels: g3Labels, costMQL: g3CostMQL },
@@ -596,11 +588,11 @@ async function buildP2() {
       properties: ['closedate', 'amount', 'dealname'],
       limit: 100
     }),
-    // 2. Deals Pré-Vendas Meta Ads (24m)
+    // 2. Deals Pré-Vendas Google Ads (24m)
     hsSearchAll('deals', {
       filterGroups: [{ filters: [
         { propertyName: 'pipeline',   operator: 'EQ',  value: PIPELINE_PRE_VENDAS },
-        { propertyName: 'sub_origem', operator: 'EQ',  value: SUB_ORIGEM_META },
+        { propertyName: 'sub_origem', operator: 'EQ',  value: SUB_ORIGEM_GOOGLE },
         { propertyName: 'createdate', operator: 'GTE', value: String(d24mAgo.getTime()) },
         { propertyName: 'createdate', operator: 'LTE', value: String(today.getTime()) }
       ]}],
@@ -664,10 +656,30 @@ async function buildP2() {
     rows.push({ mes: ym, mql, reuniao, ganho, mrr: Math.round(mrr * 100) / 100, spend, roas, cac, ltv: Math.round(ltv * 100) / 100, ltvCac, ticketMedio, payback });
   }
 
+  // Calcula Expected = média dos últimos 6 meses para cada métrica
+  const last6 = rows.slice(-6).filter(r => r.mql > 0);
+  function avg6(field) {
+    const vals = last6.map(r => r[field]).filter(v => v !== null && v !== undefined && v > 0);
+    if (!vals.length) return null;
+    return Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 100) / 100;
+  }
+  const expected = {
+    roas:        avg6('roas'),
+    cac:         avg6('cac'),
+    ltv:         avg6('ltv'),
+    ltvCac:      avg6('ltvCac'),
+    mrr:         avg6('mrr'),
+    payback:     avg6('payback'),
+    ticketMedio: avg6('ticketMedio')
+  };
+
+  // Adiciona expected a cada row como campo separado
+  rows.forEach(r => { r.expected = expected; });
+
   // Gráfico: últimos 12 meses
   const g12 = rows.slice(-12);
 
-  return { cohort: rows, g12: { labels: g12.map(r => r.mes), roas: g12.map(r => r.roas), cac: g12.map(r => r.cac) } };
+  return { cohort: rows, g12: { labels: g12.map(r => r.mes), roas: g12.map(r => r.roas), cac: g12.map(r => r.cac) }, expected };
 }
 
 // ── Memory cache para endpoints separados ──────────────────────
@@ -686,13 +698,13 @@ async function buildCostMQLMonthly() {
   const to   = new Date('2026-06-30T23:59:59.999Z');
 
   try {
-    // MQLs reais do HubSpot: pipeline Pré-Vendas + sub_origem = Meta Ads
+    // Leads reais do HubSpot: pipeline Pré-Vendas + sub_origem = Google Ads
     const mqlDeals = await Promise.race([
       hsSearchAll('deals', {
         filterGroups: [{
           filters: [
             { propertyName: 'pipeline',    operator: 'EQ',  value: PIPELINE_PRE_VENDAS },
-            { propertyName: 'sub_origem',  operator: 'EQ',  value: SUB_ORIGEM_META },
+            { propertyName: 'sub_origem',  operator: 'EQ',  value: SUB_ORIGEM_GOOGLE },
             { propertyName: 'createdate',  operator: 'GTE', value: String(from.getTime()) },
             { propertyName: 'createdate',  operator: 'LTE', value: String(to.getTime()) }
           ]
@@ -707,7 +719,7 @@ async function buildCostMQLMonthly() {
       const ym = toYMD(new Date(d.properties.createdate)).slice(0, 7);
       mqlByMonth[ym] = (mqlByMonth[ym] || 0) + 1;
     });
-    console.log('[buildCostMQLMonthly] MQL por mês (Meta Ads):', JSON.stringify(mqlByMonth));
+    console.log('[buildCostMQLMonthly] Leads por mês (Google Ads):', JSON.stringify(mqlByMonth));
 
     // Spend do Metabase (google_campaigns)
     const spendRows = await loadGoogleCampaignsFromMetabase(from, to);
@@ -743,6 +755,9 @@ async function buildCampaignsEnriched(groupBy = 'campaign') {
     console.log(`[buildCampaignsEnriched] cache HIT: ${groupBy}`);
     return memCache[cacheKey];
   }
+  // Invalida cache antigo (janela mudou para 30d)
+  delete memCache[cacheKey];
+  delete memCache[tsKey];
 
   // Mapeia groupBy para coluna real na tabela (nomes padrão Google Ads export)
   const GROUP_COL = {
@@ -755,6 +770,7 @@ async function buildCampaignsEnriched(groupBy = 'campaign') {
   // Para adgroup e keyword inclui campaign_name como coluna extra (contexto)
   const extraCol = groupBy !== 'campaign' ? `, campaign_name` : '';
 
+  const cutoff30 = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
   const sql = `
     SELECT
       ${col}${extraCol},
@@ -762,7 +778,7 @@ async function buildCampaignsEnriched(groupBy = 'campaign') {
       SUM(conversions) AS conversions,
       SUM(clicks)      AS clicks
     FROM data_analytics.google_campaigns
-    WHERE YEAR(date) = 2026
+    WHERE date >= TIMESTAMP '${toYMD(cutoff30)} 00:00:00'
     GROUP BY ${col}${extraCol}
     ORDER BY spend DESC
   `;

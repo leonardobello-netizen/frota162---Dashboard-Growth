@@ -335,13 +335,14 @@ function renderKPIs(kpis) {
       const isPos = inv ? k.delta <= 0 : k.delta >= 0;
       const cls = isPos ? 'pos' : 'neg';
       const arrow = k.delta >= 0 ? '▲' : '▼';
-      deltaHtml = `<div class="kpi-delta ${cls}">${arrow} ${Math.abs(k.delta)}% MoM</div>`;
+      deltaHtml = `<div class="kpi-delta ${cls}">${arrow} ${Math.abs(k.delta)}% vs mês ant.</div>`;
     } else {
-      deltaHtml = `<div class="kpi-delta neutral">— sem dados MoM</div>`;
+      deltaHtml = `<div class="kpi-delta neutral">— sem dados ant.</div>`;
     }
     return `<div class="kpi-card">
       <div class="kpi-label">${k.label}</div>
       <div class="kpi-value">${k.format === 'currency' ? fmt(Math.round(k.value), 'currency') : fmt(k.value, 'number')}</div>
+      <div style="font-size:0.7rem;color:#4a5568;margin-top:2px">mês atual</div>
       ${deltaHtml}
     </div>`;
   }).join('');
@@ -353,43 +354,18 @@ function renderVolumeChart(g1) {
   wrap.innerHTML = '<div class="chart-card"><canvas id="chart-volume"></canvas></div>';
   const ctx = document.getElementById('chart-volume').getContext('2d');
 
-  // Monta anotações para cada dia com importação Driva
-  const annotations = {};
-  (g1.drivaFlags || []).forEach((f, i) => {
-    annotations['driva_line_' + i] = {
-      type: 'line',
-      xMin: f.date,
-      xMax: f.date,
-      borderColor: 'rgba(237,137,54,0.8)',
-      borderWidth: 2,
-      borderDash: [4, 3],
-      label: {
-        display: true,
-        content: 'Driva (' + f.count + ')',
-        position: 'start',
-        backgroundColor: 'rgba(237,137,54,0.85)',
-        color: '#fff',
-        font: { size: 10, weight: 'bold' },
-        padding: { x: 6, y: 3 },
-        yAdjust: -6
-      }
-    };
-  });
-
   new Chart(ctx, {
     type: 'bar',
     data: {
       labels: g1.labels,
       datasets: [
-        { label: 'Leads', data: g1.leads, backgroundColor: 'rgba(99,179,237,0.6)', borderColor: '#63b3ed', borderWidth: 1 },
-        { label: 'MQL', data: g1.mql, backgroundColor: 'rgba(72,187,120,0.6)', borderColor: '#48bb78', borderWidth: 1 },
+        { label: 'Leads Google Ads', data: g1.leads, backgroundColor: 'rgba(99,179,237,0.6)', borderColor: '#63b3ed', borderWidth: 1 },
+        { label: 'Qualificados Google Ads', data: g1.mql, backgroundColor: 'rgba(72,187,120,0.6)', borderColor: '#48bb78', borderWidth: 1 },
         { label: 'MM7D Leads', data: g1.mm7Leads, type: 'line', borderColor: '#f6ad55', borderWidth: 2.5, pointRadius: 0, tension: 0.3, yAxisID: 'y' },
-        { label: 'MM7D MQL', data: g1.mm7MQL, type: 'line', borderColor: '#48bb78', borderWidth: 2.5, pointRadius: 0, tension: 0.3, yAxisID: 'y', borderDash: [5, 5] }
+        { label: 'MM7D Qualificados', data: g1.mm7MQL, type: 'line', borderColor: '#48bb78', borderWidth: 2.5, pointRadius: 0, tension: 0.3, yAxisID: 'y', borderDash: [5, 5] }
       ]
     },
-    options: mergeDeep(CHART_DEFAULTS, {
-      plugins: { annotation: { annotations } }
-    })
+    options: mergeDeep(CHART_DEFAULTS, {})
   });
 }
 
@@ -450,7 +426,7 @@ function renderCostMQLMonthly(data) {
       datasets: [
         {
           type: 'bar',
-          label: 'MQL (Meta Ads)',
+          label: 'Leads Google Ads',
           data: data.map(d => d.mql),
           backgroundColor: 'rgba(72,187,120,0.6)',
           borderColor: '#48bb78',
@@ -620,6 +596,14 @@ function renderEfficiencyChart(g12) {
 
 function renderCohortTable(rows) {
   const tbody = document.getElementById('cohort-body');
+  const expected = (rows.length && rows[0].expected) ? rows[0].expected : {};
+
+  function cellWithExp(val, expVal, format) {
+    const main = (val !== null && val !== undefined) ? fmt(val, format) : '—';
+    const exp = (expVal !== null && expVal !== undefined) ? `<div style="font-size:0.7rem;color:#718096">(exp: ${fmt(expVal, format)})</div>` : '';
+    return main + exp;
+  }
+
   tbody.innerHTML = rows.map(r => {
     let cacClass = '';
     if (r.cac !== null) {
@@ -632,14 +616,14 @@ function renderCohortTable(rows) {
       <td>${r.mql || '—'}</td>
       <td>${r.reuniao || '—'}</td>
       <td>${r.ganho || '—'}</td>
-      <td>${r.mrr ? fmt(r.mrr, 'currency') : '—'}</td>
+      <td>${cellWithExp(r.mrr || null, expected.mrr, 'currency')}</td>
       <td>${r.spend ? fmt(r.spend, 'currency') : '—'}</td>
-      <td>${r.roas !== null ? r.roas : '—'}</td>
-      <td class="${cacClass}">${r.cac !== null ? fmt(r.cac, 'currency') : '—'}</td>
-      <td>${r.ltv ? fmt(r.ltv, 'currency') : '—'}</td>
-      <td>${r.ltvCac !== null ? r.ltvCac : '—'}</td>
-      <td>${r.ticketMedio ? fmt(r.ticketMedio, 'currency') : '—'}</td>
-      <td>${r.payback !== null ? r.payback + 'm' : '—'}</td>
+      <td>${cellWithExp(r.roas, expected.roas, 'dec')}</td>
+      <td class="${cacClass}">${cellWithExp(r.cac, expected.cac, 'currency')}</td>
+      <td>${cellWithExp(r.ltv || null, expected.ltv, 'currency')}</td>
+      <td>${cellWithExp(r.ltvCac, expected.ltvCac, 'dec')}</td>
+      <td>${cellWithExp(r.ticketMedio || null, expected.ticketMedio, 'currency')}</td>
+      <td>${r.payback !== null ? r.payback + 'm' + (expected.payback !== null && expected.payback !== undefined ? `<div style="font-size:0.7rem;color:#718096">(exp: ${expected.payback}m)</div>` : '') : '—'}</td>
     </tr>`;
   }).join('');
 }
