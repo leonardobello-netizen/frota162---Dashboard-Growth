@@ -49,6 +49,11 @@ function requireAuth(req, res, next) {
 
 const CACHE_DIR = path.join(__dirname, 'data', 'cache');
 
+// Garante que o diretório de cache existe (necessário no Railway que parte do zero)
+try {
+  fs.mkdirSync(CACHE_DIR, { recursive: true });
+} catch (_) {}
+
 const MEM_CACHE = {};
 const CACHE_TTL = 24 * 60 * 60 * 1000; // 24h (D-1 data only changes once per day)
 
@@ -869,8 +874,18 @@ app.get('/api/status', (req, res) => {
 
 app.get('/api/p1', async (req, res) => {
   try {
-    const data = await withCache('p1', buildP1);
-    res.json(data);
+    // Se cache em memória existe, retorna imediatamente (< 1ms)
+    if (MEM_CACHE['p1'] && MEM_CACHE['p1'].data) {
+      return res.json(MEM_CACHE['p1'].data);
+    }
+    // Verifica cache em disco
+    const disk = readDiskCache('p1');
+    if (disk) {
+      MEM_CACHE['p1'] = { ts: Date.now(), data: disk };
+      return res.json(disk);
+    }
+    // Cache ainda sendo construído em background — avisa frontend para tentar novamente
+    return res.status(202).json({ loading: true, message: 'Dados sendo carregados do HubSpot, tente novamente em 30 segundos.' });
   } catch (e) {
     console.error('P1 error:', e.message);
     res.status(500).json({ error: e.message });
@@ -949,12 +964,18 @@ app.listen(PORT, () => {
   if (p1disk) { MEM_CACHE['p1'] = { ts: Date.now(), data: p1disk }; console.log('[startup] P1 carregado do disco'); }
   if (p2disk) { MEM_CACHE['p2'] = { ts: Date.now(), data: p2disk }; console.log('[startup] P2 carregado do disco'); }
 
-  // Se cache não existe, faz rebuild em background
+  // Se cache não existe, faz rebuild imediato em background (sem delay — crítico no Railway)
   if (!p1disk || !p2disk) {
-    sleep(2000).then(() => {
-      console.log('[preload] cache ausente, iniciando build...');
-      if (!p1disk) buildP1().then(d => { MEM_CACHE['p1'] = { ts: Date.now(), data: d }; writeDiskCache('p1', d); console.log('[preload] P1 salvo'); }).catch(e => console.error('[preload] P1 erro:', e.message));
-      if (!p2disk) buildP2().then(d => { MEM_CACHE['p2'] = { ts: Date.now(), data: d }; writeDiskCache('p2', d); console.log('[preload] P2 salvo'); }).catch(e => console.error('[preload] P2 erro:', e.message));
-    });
+    console.log('[preload] cache ausente, iniciando build imediato em background...');
+    if (!p1disk) {
+      buildP1()
+        .then(d => { MEM_CACHE['p1'] = { ts: Date.now(), data: d }; writeDiskCache('p1', d); console.log('[preload] P1 pronto ✅'); })
+        .catch(e => console.error('[preload] P1 erro:', e.message));
+    }
+    if (!p2disk) {
+      buildP2()
+        .then(d => { MEM_CACHE['p2'] = { ts: Date.now(), data: d }; writeDiskCache('p2', d); console.log('[preload] P2 pronto ✅'); })
+        .catch(e => console.error('[preload] P2 erro:', e.message));
+    }
   }
 });

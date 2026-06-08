@@ -248,13 +248,37 @@ function showTab(name) {
   if (name === 'p2' && !p2Loaded) { p2Loaded = true; loadP2(); }
 }
 
-// ── P1: Carregamento progressivo ─────────────────────────────
+// ── P1: Carregamento progressivo (com polling para cold start) ──
 async function loadP1() {
   try {
     console.log('[DEBUG] loadP1() iniciado');
-    const res = await fetch('/api/p1');
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const data = await res.json();
+
+    // Polling: tenta até 20x com intervalo de 20s (até 6.5min)
+    let data = null;
+    let attempts = 0;
+    const MAX_ATTEMPTS = 20;
+    while (!data && attempts < MAX_ATTEMPTS) {
+      attempts++;
+      const res = await fetch('/api/p1');
+      if (res.status === 202) {
+        // Dados ainda carregando em background — mostra mensagem e aguarda
+        const info = await res.json();
+        console.log(`[DEBUG] P1 loading... tentativa ${attempts}/${MAX_ATTEMPTS}`);
+        const kpiGrid = document.getElementById('kpi-grid');
+        if (kpiGrid) kpiGrid.innerHTML = `<div style="color:#63b3ed;padding:24px;text-align:center;grid-column:1/-1">
+          <div style="font-size:1.5rem;margin-bottom:8px">⏳</div>
+          <div style="font-weight:600;margin-bottom:4px">Carregando dados do HubSpot...</div>
+          <div style="font-size:0.8rem;color:#718096">Primeira carga leva ~2 minutos. Tentativa ${attempts}/${MAX_ATTEMPTS}.</div>
+        </div>`;
+        reveal('sec-kpis');
+        await new Promise(r => setTimeout(r, 20000)); // aguarda 20s
+        continue;
+      }
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      data = await res.json();
+    }
+
+    if (!data) throw new Error('Dados não disponíveis após ' + MAX_ATTEMPTS + ' tentativas.');
     console.log('[DEBUG] /api/p1 carregado:', Object.keys(data));
 
     // 1. KPIs — imediato
