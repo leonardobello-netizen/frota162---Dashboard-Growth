@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Frota 162 — RevOps Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0f1117; color: #e2e8f0; font-family: system-ui, -apple-system, sans-serif; min-height: 100vh; }
+
+  header { padding: 20px 32px; border-bottom: 1px solid #2d3748; display: flex; align-items: center; gap: 16px; }
+  header h1 { font-size: 1.25rem; font-weight: 700; color: #fff; }
+  header span { font-size: 0.8rem; color: #718096; }
+
+  .tabs { display: flex; gap: 0; border-bottom: 1px solid #2d3748; padding: 0 32px; }
+  .tab-btn { padding: 12px 24px; background: none; border: none; color: #718096; cursor: pointer; font-size: 0.9rem; font-weight: 500; border-bottom: 2px solid transparent; transition: all 0.15s; }
+  .tab-btn.active { color: #63b3ed; border-bottom-color: #63b3ed; }
+  .tab-btn:hover { color: #e2e8f0; }
+
+  .tab-content { display: none; padding: 32px; max-width: 1400px; margin: 0 auto; }
+  .tab-content.active { display: block; }
+
+  .section { margin-bottom: 40px; }
+  .section-question { font-size: 0.85rem; color: #63b3ed; font-weight: 600; margin-bottom: 16px; letter-spacing: 0.03em; text-transform: uppercase; }
+
+  /* KPI Cards */
+  .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; }
+  .kpi-card { background: #1a1f2e; border-radius: 10px; padding: 20px; border: 1px solid #2d3748; }
+  .kpi-label { font-size: 0.75rem; color: #718096; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.04em; }
+  .kpi-value { font-size: 1.6rem; font-weight: 700; color: #fff; }
+  .kpi-delta { font-size: 0.8rem; margin-top: 6px; }
+  .kpi-delta.pos { color: #48bb78; }
+  .kpi-delta.neg { color: #fc8181; }
+  .kpi-delta.neutral { color: #718096; }
+
+  /* Charts */
+  .chart-card { background: #1a1f2e; border-radius: 10px; padding: 24px; border: 1px solid #2d3748; }
+  .chart-card canvas { max-height: 300px; }
+  .chart-card.tall canvas { max-height: 340px; }
+
+  /* Table */
+  .table-card { background: #1a1f2e; border-radius: 10px; border: 1px solid #2d3748; overflow: hidden; }
+  .table-header { padding: 16px 20px; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid #2d3748; }
+  .toggle-btn { padding: 6px 14px; border-radius: 6px; border: 1px solid #4a5568; background: none; color: #718096; font-size: 0.8rem; cursor: pointer; transition: all 0.15s; }
+  .toggle-btn.active { background: #2b6cb0; color: #fff; border-color: #2b6cb0; }
+  table { width: 100%; border-collapse: collapse; }
+  th { padding: 12px 16px; text-align: left; font-size: 0.75rem; color: #718096; text-transform: uppercase; letter-spacing: 0.04em; background: #151924; }
+  td { padding: 12px 16px; font-size: 0.85rem; border-top: 1px solid #2d3748; }
+  tr.zero-leads { background: rgba(252, 129, 129, 0.08); }
+  tr.zero-leads td:first-child { border-left: 3px solid #fc8181; }
+  tr:hover td { background: rgba(255,255,255,0.02); }
+
+  /* Cohort table */
+  .cohort-wrap { overflow-x: auto; }
+  .cac-green { color: #48bb78; font-weight: 600; }
+  .cac-yellow { color: #ecc94b; font-weight: 600; }
+  .cac-red { color: #fc8181; font-weight: 600; }
+
+  /* Refresh Button */
+  .header-actions { display: flex; align-items: center; gap: 12px; margin-left: auto; }
+  .refresh-btn { padding: 8px 16px; background: #2b6cb0; border: 1px solid #3182ce; color: #fff; border-radius: 6px; cursor: pointer; font-size: 0.85rem; font-weight: 500; transition: all 0.2s; display: flex; align-items: center; gap: 6px; }
+  .refresh-btn:hover { background: #2c5aa0; }
+  .refresh-btn.loading { opacity: 0.6; cursor: not-allowed; }
+  .refresh-icon { display: inline-block; }
+  .refresh-icon.spinning { animation: spin 1s linear infinite; }
+  @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  .last-update { font-size: 0.75rem; color: #718096; }
+
+  /* ── Skeleton ──────────────────────────────────────────────── */
+  @keyframes shimmer {
+    0%   { background-position: -600px 0; }
+    100% { background-position:  600px 0; }
+  }
+  .skeleton {
+    background: linear-gradient(90deg, #1a1f2e 25%, #252b3b 50%, #1a1f2e 75%);
+    background-size: 600px 100%;
+    animation: shimmer 1.4s infinite linear;
+    border-radius: 6px;
+  }
+  .skeleton-kpi-card { background: #1a1f2e; border-radius: 10px; padding: 20px; border: 1px solid #2d3748; }
+  .skeleton-label { height: 10px; width: 70%; margin-bottom: 14px; }
+  .skeleton-value { height: 28px; width: 50%; margin-bottom: 10px; }
+  .skeleton-delta { height: 10px; width: 40%; }
+  .skeleton-chart { background: #1a1f2e; border-radius: 10px; padding: 24px; border: 1px solid #2d3748; min-height: 340px; display: flex; align-items: center; justify-content: center; }
+  .skeleton-chart-inner { width: 100%; height: 280px; border-radius: 6px; }
+  .skeleton-chart.loaded { display: block; padding: 0; background: none; border: none; min-height: unset; }
+  .skeleton-table { background: #1a1f2e; border-radius: 10px; border: 1px solid #2d3748; padding: 20px; }
+  .skeleton-row { height: 40px; margin-bottom: 8px; border-radius: 4px; }
+
+  /* Section fade-in */
+  .section { opacity: 1; transform: none; transition: opacity 0.3s ease, transform 0.3s ease; }
+  .section.visible { opacity: 1; transform: none; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Frota 162 — RevOps</h1>
+  <span>Dashboard v2</span>
+  <div class="header-actions">
+    <div class="last-update" id="last-update">Carregando...</div>
+    <button class="refresh-btn" onclick="refreshDashboard()" id="refresh-btn">
+      <span class="refresh-icon" id="refresh-icon">↻</span>
+      <span id="refresh-text">Atualizar</span>
+    </button>
+    <a href="/logout" style="padding:8px 14px;background:none;border:1px solid #4a5568;color:#718096;border-radius:6px;font-size:0.8rem;text-decoration:none;transition:all 0.2s" onmouseover="this.style.color='#e2e8f0'" onmouseout="this.style.color='#718096'">Sair</a>
+  </div>
+</header>
+
+<div class="tabs">
+  <button class="tab-btn active" onclick="showTab('p1')">P1 — Operação</button>
+  <button class="tab-btn" onclick="showTab('p2')">P2 — Resultado</button>
+</div>
+
+<!-- ABA P1 -->
+<div id="tab-p1" class="tab-content active">
+
+  <!-- Seção 1: KPIs -->
+  <div class="section" id="sec-kpis">
+    <div class="kpi-grid" id="kpi-grid">
+      <!-- Skeletons iniciais para 6 KPIs -->
+      ${Array(6).fill(0).map(() => `
+      <div class="skeleton-kpi-card">
+        <div class="skeleton skeleton-label"></div>
+        <div class="skeleton skeleton-value"></div>
+        <div class="skeleton skeleton-delta"></div>
+      </div>`).join('')}
+    </div>
+  </div>
+
+  <!-- Seção 2: Volume -->
+  <div class="section" id="sec-volume">
+    <div class="section-question">O volume de leads e MQLs está subindo ou caindo?</div>
+    <div id="chart-volume-wrap" class="skeleton-chart">
+      <div class="skeleton skeleton-chart-inner"></div>
+    </div>
+  </div>
+
+  <!-- Seção 3: Frota -->
+  <div class="section" id="sec-frota">
+    <div class="section-question">A qualidade de placas na frota dos leads está melhorando?</div>
+    <div id="chart-frota-wrap" class="skeleton-chart">
+      <div class="skeleton skeleton-chart-inner"></div>
+    </div>
+  </div>
+
+  <!-- Seção 4: Custo/MQL -->
+  <div class="section" id="sec-cpmql">
+    <div class="section-question">O custo para gerar um MQL está sob controle?</div>
+    <div id="chart-cpmql-wrap" class="skeleton-chart">
+      <div class="skeleton skeleton-chart-inner"></div>
+    </div>
+  </div>
+
+  <!-- Seção 5: Campanhas -->
+  <div class="section" id="sec-camp">
+    <div class="section-question">Onde meu dinheiro está indo, o que ele gera, e o que eu corto?</div>
+    <div id="camp-table-wrap" class="skeleton-table">
+      <div class="skeleton skeleton-row"></div>
+      <div class="skeleton skeleton-row"></div>
+      <div class="skeleton skeleton-row"></div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ABA P2 -->
+<div id="tab-p2" class="tab-content">
+
+  <div class="section" id="sec-efficiency">
+    <div class="section-question">A eficiência de aquisição está melhorando safra a safra?</div>
+    <div id="chart-efficiency-wrap" class="skeleton-chart">
+      <div class="skeleton skeleton-chart-inner"></div>
+    </div>
+  </div>
+
+  <div class="section" id="sec-cohort">
+    <div class="section-question">Cohort mensal — últimos 24 meses</div>
+    <div id="cohort-wrap" class="table-card">
+      <div class="cohort-wrap">
+        <table id="cohort-table">
+          <thead>
+            <tr>
+              <th>Mês</th><th>MQL</th><th>Reunião</th><th>Ganho</th>
+              <th>MRR (R$)</th><th>Spend (R$)</th><th>ROAS</th>
+              <th>CAC (R$)</th><th>LTV (R$)</th><th>LTV/CAC</th>
+              <th>Ticket Médio (R$)</th><th>Payback (m)</th>
+            </tr>
+          </thead>
+          <tbody id="cohort-body">
+            <tr><td colspan="12" style="text-align:center;color:#718096;padding:32px">Carregando...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ── Utilities ───────────────────────────────────────────────
+function fmt(n, type) {
+  if (n === null || n === undefined || isNaN(n)) return '—';
+  if (type === 'currency') return 'R$ ' + n.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+  if (type === 'number') return n.toLocaleString('pt-BR');
+  if (type === 'dec') return n.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+  return n;
+}
+
+const CHART_DEFAULTS = {
+  responsive: true,
+  maintainAspectRatio: true,
+  plugins: { legend: { labels: { color: '#a0aec0', boxWidth: 12, font: { size: 11 } } } },
+  scales: {
+    x: { ticks: { color: '#718096', font: { size: 10 } }, grid: { color: '#2d3748' } },
+    y: { ticks: { color: '#718096', font: { size: 10 } }, grid: { color: '#2d3748' } }
+  }
+};
+
+function mergeDeep(target, source) {
+  const out = Object.assign({}, target);
+  for (const k in source) {
+    if (source[k] && typeof source[k] === 'object' && !Array.isArray(source[k])) {
+      out[k] = mergeDeep(target[k] || {}, source[k]);
+    } else {
+      out[k] = source[k];
+    }
+  }
+  return out;
+}
+
+function reveal(sectionId) {
+  const el = document.getElementById(sectionId);
+  if (el) el.classList.add('visible');
+}
+
+// ── Tab logic ────────────────────────────────────────────────
+let p2Loaded = false;
+
+function showTab(name) {
+  document.querySelectorAll('.tab-btn').forEach((b, i) => {
+    b.classList.toggle('active', (name === 'p1' && i === 0) || (name === 'p2' && i === 1));
+  });
+  document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  if (name === 'p2' && !p2Loaded) { p2Loaded = true; loadP2(); }
+}
+
+// ── P1: Carregamento progressivo ─────────────────────────────
+async function loadP1() {
+  try {
+    console.log('[DEBUG] loadP1() iniciado');
+    const res = await fetch('/api/p1');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    console.log('[DEBUG] /api/p1 carregado:', Object.keys(data));
+
+    // 1. KPIs — imediato
+    console.log('[DEBUG] Renderizando KPIs...');
+    renderKPIs(data.kpis);
+    reveal('sec-kpis');
+
+    // 2. Gráfico de volume — próximo frame
+    await nextFrame();
+    console.log('[DEBUG] Renderizando Volume (g1)...');
+    renderVolumeChart(data.g1);
+    reveal('sec-volume');
+
+    // 3. Gráfico de frota
+    await nextFrame();
+    console.log('[DEBUG] Renderizando Frota (g2)...');
+    renderFrotaChart(data.g2);
+    reveal('sec-frota');
+
+    // 4. Custo/MQL por mês 2026
+    await nextFrame();
+    console.log('[DEBUG] Buscando /api/p1/cost-mql-monthly...');
+    const costRes = await fetch('/api/p1/cost-mql-monthly');
+    const costData = await costRes.json();
+    console.log('[DEBUG] Renderizando Custo/MQL com', costData.g3Monthly.length, 'meses...');
+    renderCostMQLMonthly(costData.g3Monthly);
+    console.log('[DEBUG] Revelando sec-cpmql...');
+    reveal('sec-cpmql');
+
+    // 5. Tabela de campanhas enriquecida
+    await nextFrame();
+    console.log('[DEBUG] Buscando /api/p1/campaigns-enriched...');
+    const campRes = await fetch('/api/p1/campaigns-enriched');
+    const campData = await campRes.json();
+    console.log('[DEBUG] Renderizando Campanhas com', campData.campaigns.length, 'campanhas...');
+    renderCampTable(campData.campaigns);
+    console.log('[DEBUG] Revelando sec-camp...');
+    reveal('sec-camp');
+
+    console.log('[DEBUG] ✅ loadP1() completado com sucesso!');
+    updateLastUpdate();
+  } catch (e) {
+    console.error('[ERROR] Erro ao carregar P1:', e);
+    document.getElementById('kpi-grid').innerHTML = '<div style="color:#fc8181;padding:16px">Erro ao carregar dados. Tente atualizar. Erro: ' + e.message + '</div>';
+    reveal('sec-kpis');
+  }
+}
+
+function nextFrame() {
+  return new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
+}
+
+function renderKPIs(kpis) {
+  const grid = document.getElementById('kpi-grid');
+  grid.innerHTML = kpis.map(k => {
+    let deltaHtml = '';
+    if (k.delta !== null && k.delta !== undefined) {
+      const inv = k.invertDelta;
+      const isPos = inv ? k.delta <= 0 : k.delta >= 0;
+      const cls = isPos ? 'pos' : 'neg';
+      const arrow = k.delta >= 0 ? '▲' : '▼';
+      deltaHtml = `<div class="kpi-delta ${cls}">${arrow} ${Math.abs(k.delta)}% vs mês ant.</div>`;
+    } else {
+      deltaHtml = `<div class="kpi-delta neutral">— sem dados ant.</div>`;
+    }
+    return `<div class="kpi-card">
+      <div class="kpi-label">${k.label}</div>
+      <div class="kpi-value">${k.format === 'currency' ? fmt(Math.round(k.value), 'currency') : fmt(k.value, 'number')}</div>
+      ${deltaHtml}
+    </div>`;
+  }).join('');
+}
+
+function renderVolumeChart(g1) {
+  const wrap = document.getElementById('chart-volume-wrap');
+  wrap.className = 'skeleton-chart loaded';
+  wrap.innerHTML = '<div class="chart-card"><canvas id="chart-volume"></canvas></div>';
+  const ctx = document.getElementById('chart-volume').getContext('2d');
+
+  // Monta anotações para cada dia com importação Driva
+  const annotations = {};
+  (g1.drivaFlags || []).forEach((f, i) => {
+    annotations['driva_line_' + i] = {
+      type: 'line',
+      xMin: f.date,
+      xMax: f.date,
+      borderColor: 'rgba(237,137,54,0.8)',
+      borderWidth: 2,
+      borderDash: [4, 3],
+      label: {
+        display: true,
+        content: 'Driva (' + f.count + ')',
+        position: 'start',
+        backgroundColor: 'rgba(237,137,54,0.85)',
+        color: '#fff',
+        font: { size: 10, weight: 'bold' },
+        padding: { x: 6, y: 3 },
+        yAdjust: -6
+      }
+    };
+  });
+
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: g1.labels,
+      datasets: [
+        { label: 'Leads', data: g1.leads, backgroundColor: 'rgba(99,179,237,0.6)', borderColor: '#63b3ed', borderWidth: 1 },
+        { label: 'MQL', data: g1.mql, backgroundColor: 'rgba(72,187,120,0.6)', borderColor: '#48bb78', borderWidth: 1 },
+        { label: 'MM7D Leads', data: g1.mm7Leads, type: 'line', borderColor: '#f6ad55', borderWidth: 2.5, pointRadius: 0, tension: 0.3, yAxisID: 'y' },
+        { label: 'MM7D MQL', data: g1.mm7MQL, type: 'line', borderColor: '#48bb78', borderWidth: 2.5, pointRadius: 0, tension: 0.3, yAxisID: 'y', borderDash: [5, 5] }
+      ]
+    },
+    options: mergeDeep(CHART_DEFAULTS, {
+      plugins: { annotation: { annotations } }
+    })
+  });
+}
+
+function renderFrotaChart(g2) {
+  const wrap = document.getElementById('chart-frota-wrap');
+  wrap.className = 'skeleton-chart loaded';
+  wrap.innerHTML = '<div class="chart-card"><canvas id="chart-frota"></canvas></div>';
+  const ctx = document.getElementById('chart-frota').getContext('2d');
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: g2.labels,
+      datasets: [
+        { label: 'Últimos 30d', data: g2.d30, backgroundColor: 'rgba(99,179,237,0.7)' },
+        { label: 'Últimos 60d', data: g2.d60, backgroundColor: 'rgba(72,187,120,0.7)' },
+        { label: 'Últimos 90d', data: g2.d90, backgroundColor: 'rgba(246,173,85,0.7)' }
+      ]
+    },
+    options: mergeDeep(CHART_DEFAULTS, { plugins: { legend: { labels: { color: '#a0aec0' } } } })
+  });
+}
+
+function renderCostMQLChart(g3) {
+  const wrap = document.getElementById('chart-cpmql-wrap');
+  wrap.className = 'skeleton-chart loaded';
+  wrap.innerHTML = '<div class="chart-card"><canvas id="chart-cpmql"></canvas></div>';
+  const ctx = document.getElementById('chart-cpmql').getContext('2d');
+  new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: g3.labels,
+      datasets: [{
+        label: 'Custo/MQL Rolling 7d (R$)',
+        data: g3.costMQL,
+        borderColor: '#fc8181',
+        backgroundColor: 'rgba(252,129,129,0.1)',
+        borderWidth: 2,
+        pointRadius: 3,
+        tension: 0.3,
+        spanGaps: true
+      }]
+    },
+    options: mergeDeep(CHART_DEFAULTS, {
+      scales: { y: { ticks: { callback: v => 'R$' + Math.round(v).toLocaleString('pt-BR') } } }
+    })
+  });
+}
+
+function renderCostMQLMonthly(data) {
+  const wrap = document.getElementById('chart-cpmql-wrap');
+  if (!wrap) return;
+  wrap.className = 'skeleton-chart loaded';
+  wrap.innerHTML = '<div class="chart-card"><canvas id="chart-cpmql"></canvas></div>';
+  const ctx = document.getElementById('chart-cpmql').getContext('2d');
+  new Chart(ctx, {
+    data: {
+      labels: data.map(d => d.mes),
+      datasets: [
+        {
+          type: 'bar',
+          label: 'MQL (Meta Ads)',
+          data: data.map(d => d.mql),
+          backgroundColor: 'rgba(72,187,120,0.6)',
+          borderColor: '#48bb78',
+          borderWidth: 1,
+          yAxisID: 'yMQL'
+        },
+        {
+          type: 'line',
+          label: 'Custo/MQL (R$)',
+          data: data.map(d => d.costPerMQL),
+          borderColor: '#fc8181',
+          backgroundColor: 'rgba(252,129,129,0.1)',
+          borderWidth: 2,
+          pointRadius: 5,
+          tension: 0.3,
+          spanGaps: true,
+          yAxisID: 'yCost'
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: true,
+      plugins: { legend: { labels: { color: '#a0aec0', boxWidth: 12, font: { size: 11 } } } },
+      scales: {
+        x: { ticks: { color: '#718096', font: { size: 10 } }, grid: { color: '#2d3748' } },
+        yMQL: {
+          position: 'left',
+          ticks: { color: '#48bb78', font: { size: 10 } },
+          grid: { color: '#2d3748' },
+          title: { display: true, text: 'MQL', color: '#48bb78', font: { size: 11 } }
+        },
+        yCost: {
+          position: 'right',
+          ticks: { color: '#fc8181', font: { size: 10 }, callback: v => 'R$' + Math.round(v).toLocaleString('pt-BR') },
+          grid: { drawOnChartArea: false },
+          title: { display: true, text: 'Custo/MQL', color: '#fc8181', font: { size: 11 } }
+        }
+      }
+    }
+  });
+}
+
+function renderCampTable(rows) {
+  console.log('[DEBUG] renderCampTable() iniciado com', rows ? rows.length : 0, 'campanhas');
+  const wrap = document.getElementById('camp-table-wrap');
+  if (!wrap) {
+    console.error('[ERROR] Elemento #camp-table-wrap não encontrado!');
+    return;
+  }
+  if (!rows || !rows.length) {
+    console.log('[DEBUG] Sem dados de campanha');
+    wrap.innerHTML = '<div style="padding:24px;color:#718096">Sem dados de campanha</div>';
+    return;
+  }
+  console.log('[DEBUG] Renderizando tabela com', rows.length, 'campanhas...');
+  wrap.className = 'table-card';
+  wrap.innerHTML = `<div class="table-header"><span style="font-size:0.85rem;font-weight:600">Campanhas — 2026 (Metabase)</span></div>
+  <table>
+    <thead><tr>
+      <th>Campanha</th><th>Spend (R$)</th><th>Conversões</th><th>Custo/Conv (R$)</th><th>Clicks</th><th>CTR (%)</th>
+    </tr></thead>
+    <tbody>${rows.map(r => {
+      return `<tr>
+        <td>${r.name}</td>
+        <td>${fmt(r.spend, 'currency')}</td>
+        <td>${fmt(r.conversions, 'number')}</td>
+        <td>${r.costPerConversion ? fmt(r.costPerConversion, 'currency') : '—'}</td>
+        <td>${fmt(r.clicks, 'number')}</td>
+        <td>${r.ctr ? (r.ctr.toFixed(2) + '%') : '—'}</td>
+      </tr>`;
+    }).join('')}</tbody>
+  </table>`;
+  console.log('[DEBUG] ✅ Tabela renderizada com sucesso!');
+}
+
+// ── P2 ───────────────────────────────────────────────────────
+async function loadP2() {
+  try {
+    const res = await fetch('/api/p2');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+
+    await nextFrame();
+    renderEfficiencyChart(data.g12);
+    reveal('sec-efficiency');
+
+    await nextFrame();
+    renderCohortTable(data.cohort);
+    reveal('sec-cohort');
+  } catch (e) {
+    console.error('Erro ao carregar P2:', e);
+  }
+}
+
+function renderEfficiencyChart(g12) {
+  const wrap = document.getElementById('chart-efficiency-wrap');
+  wrap.className = 'skeleton-chart loaded';
+  wrap.innerHTML = '<div class="chart-card tall"><canvas id="chart-efficiency"></canvas></div>';
+  const ctx = document.getElementById('chart-efficiency').getContext('2d');
+  new Chart(ctx, {
+    data: {
+      labels: g12.labels,
+      datasets: [
+        { type: 'bar', label: 'ROAS', data: g12.roas, backgroundColor: 'rgba(99,179,237,0.6)', yAxisID: 'yRoas' },
+        { type: 'line', label: 'CAC (R$)', data: g12.cac, borderColor: '#fc8181', backgroundColor: 'transparent', borderWidth: 2, pointRadius: 4, tension: 0.3, spanGaps: true, yAxisID: 'yCac' }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: true,
+      plugins: { legend: { labels: { color: '#a0aec0', font: { size: 11 } } } },
+      scales: {
+        x: { ticks: { color: '#718096', font: { size: 10 } }, grid: { color: '#2d3748' } },
+        yRoas: { position: 'left', ticks: { color: '#63b3ed', font: { size: 10 } }, grid: { color: '#2d3748' }, title: { display: true, text: 'ROAS', color: '#63b3ed' } },
+        yCac: { position: 'right', ticks: { color: '#fc8181', font: { size: 10 }, callback: v => 'R$' + Math.round(v).toLocaleString('pt-BR') }, grid: { drawOnChartArea: false }, title: { display: true, text: 'CAC (R$)', color: '#fc8181' } }
+      }
+    }
+  });
+}
+
+function renderCohortTable(rows) {
+  const tbody = document.getElementById('cohort-body');
+  tbody.innerHTML = rows.map(r => {
+    let cacClass = '';
+    if (r.cac !== null) {
+      if (r.cac < 2000) cacClass = 'cac-green';
+      else if (r.cac <= 5000) cacClass = 'cac-yellow';
+      else cacClass = 'cac-red';
+    }
+    return `<tr>
+      <td>${r.mes}</td>
+      <td>${r.mql || '—'}</td>
+      <td>${r.reuniao || '—'}</td>
+      <td>${r.ganho || '—'}</td>
+      <td>${r.mrr ? fmt(r.mrr, 'currency') : '—'}</td>
+      <td>${r.spend ? fmt(r.spend, 'currency') : '—'}</td>
+      <td>${r.roas !== null ? r.roas : '—'}</td>
+      <td class="${cacClass}">${r.cac !== null ? fmt(r.cac, 'currency') : '—'}</td>
+      <td>${r.ltv ? fmt(r.ltv, 'currency') : '—'}</td>
+      <td>${r.ltvCac !== null ? r.ltvCac : '—'}</td>
+      <td>${r.ticketMedio ? fmt(r.ticketMedio, 'currency') : '—'}</td>
+      <td>${r.payback !== null ? r.payback + 'm' : '—'}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ── Refresh ──────────────────────────────────────────────────
+function updateLastUpdate() {
+  const now = new Date();
+  const time = now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  document.getElementById('last-update').textContent = `Atualizado ${time}`;
+}
+
+async function refreshDashboard() {
+  const btn = document.getElementById('refresh-btn');
+  const icon = document.getElementById('refresh-icon');
+  const text = document.getElementById('refresh-text');
+  btn.disabled = true;
+  btn.classList.add('loading');
+  icon.classList.add('spinning');
+  text.textContent = 'Atualizando...';
+  try {
+    window.location.reload();
+  } catch (_) {
+    btn.disabled = false;
+    btn.classList.remove('loading');
+    icon.classList.remove('spinning');
+    text.textContent = 'Atualizar';
+  }
+}
+
+// ── Init ─────────────────────────────────────────────────────
+loadP1();
+</script>
+</body>
+</html>

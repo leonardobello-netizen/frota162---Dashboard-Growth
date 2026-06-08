@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Frota 162 — Acesso</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #0f1117;
+    color: #e2e8f0;
+    font-family: system-ui, -apple-system, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .login-card {
+    background: #1a1f2e;
+    border: 1px solid #2d3748;
+    border-radius: 12px;
+    padding: 40px 48px;
+    width: 100%;
+    max-width: 400px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+  }
+  .logo {
+    text-align: center;
+    margin-bottom: 32px;
+  }
+  .logo h1 {
+    font-size: 1.4rem;
+    font-weight: 700;
+    color: #fff;
+  }
+  .logo span {
+    font-size: 0.8rem;
+    color: #718096;
+  }
+  .form-group {
+    margin-bottom: 20px;
+  }
+  label {
+    display: block;
+    font-size: 0.78rem;
+    color: #718096;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 8px;
+  }
+  input {
+    width: 100%;
+    padding: 12px 14px;
+    background: #0f1117;
+    border: 1px solid #2d3748;
+    border-radius: 8px;
+    color: #e2e8f0;
+    font-size: 0.95rem;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  input:focus { border-color: #63b3ed; }
+  button {
+    width: 100%;
+    padding: 13px;
+    background: #2b6cb0;
+    border: none;
+    border-radius: 8px;
+    color: #fff;
+    font-size: 0.95rem;
+    font-weight: 600;
+    cursor: pointer;
+    margin-top: 8px;
+    transition: background 0.2s;
+  }
+  button:hover { background: #2c5aa0; }
+  .error {
+    background: rgba(252,129,129,0.1);
+    border: 1px solid rgba(252,129,129,0.3);
+    border-radius: 8px;
+    color: #fc8181;
+    font-size: 0.85rem;
+    padding: 10px 14px;
+    margin-bottom: 20px;
+    display: none;
+  }
+  .error.visible { display: block; }
+</style>
+</head>
+<body>
+<div class="login-card">
+  <div class="logo">
+    <h1>Frota 162 — RevOps</h1>
+    <span>Dashboard v2 · Acesso restrito</span>
+  </div>
+  <div class="error" id="error-msg">Usuário ou senha incorretos.</div>
+  <form method="POST" action="/login">
+    <div class="form-group">
+      <label>Usuário</label>
+      <input type="text" name="username" autocomplete="username" required autofocus>
+    </div>
+    <div class="form-group">
+      <label>Senha</label>
+      <input type="password" name="password" autocomplete="current-password" required>
+    </div>
+    <button type="submit">Entrar</button>
+  </form>
+</div>
+<script>
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('error')) {
+    document.getElementById('error-msg').classList.add('visible');
+  }
+</script>
+</body>
+</html>

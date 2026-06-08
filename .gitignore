@@ -1,0 +1,27 @@
+# Dependências
+node_modules/
+
+# Variáveis de ambiente (NUNCA subir para o repositório)
+.env
+.env.local
+.env.production
+
+# Cache de dados (gerado automaticamente em produção)
+data/cache/
+data/google_ads.csv
+
+# Logs
+server.log
+server.err
+nohup.out
+*.log
+
+# Arquivos de teste e debug
+test-*.js
+count-by-period.js
+p1_data.json
+p1_export.json
+
+# Sistema operacional
+.DS_Store
+Thumbs.db
