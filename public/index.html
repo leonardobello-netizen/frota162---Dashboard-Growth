@@ -310,12 +310,7 @@ async function loadP1() {
 
     // 5. Tabela de campanhas enriquecida
     await nextFrame();
-    console.log('[DEBUG] Buscando /api/p1/campaigns-enriched...');
-    const campRes = await fetch('/api/p1/campaigns-enriched');
-    const campData = await campRes.json();
-    console.log('[DEBUG] Renderizando Campanhas com', campData.campaigns.length, 'campanhas...');
-    renderCampTable(campData.campaigns);
-    console.log('[DEBUG] Revelando sec-camp...');
+    await loadCampTable('campaign');
     reveal('sec-camp');
 
     console.log('[DEBUG] ✅ loadP1() completado com sucesso!');
@@ -499,37 +494,64 @@ function renderCostMQLMonthly(data) {
   });
 }
 
-function renderCampTable(rows) {
-  console.log('[DEBUG] renderCampTable() iniciado com', rows ? rows.length : 0, 'campanhas');
+let _campCurrentGroup = 'campaign';
+
+async function loadCampTable(groupBy) {
+  _campCurrentGroup = groupBy;
   const wrap = document.getElementById('camp-table-wrap');
-  if (!wrap) {
-    console.error('[ERROR] Elemento #camp-table-wrap não encontrado!');
-    return;
-  }
-  if (!rows || !rows.length) {
-    console.log('[DEBUG] Sem dados de campanha');
-    wrap.innerHTML = '<div style="padding:24px;color:#718096">Sem dados de campanha</div>';
-    return;
-  }
-  console.log('[DEBUG] Renderizando tabela com', rows.length, 'campanhas...');
+  if (!wrap) return;
+
+  // Mostra loading enquanto busca
   wrap.className = 'table-card';
-  wrap.innerHTML = `<div class="table-header"><span style="font-size:0.85rem;font-weight:600">Campanhas — 2026 (Metabase)</span></div>
-  <table>
-    <thead><tr>
-      <th>Campanha</th><th>Spend (R$)</th><th>Conversões</th><th>Custo/Conv (R$)</th><th>Clicks</th><th>CTR (%)</th>
-    </tr></thead>
-    <tbody>${rows.map(r => {
-      return `<tr>
-        <td>${r.name}</td>
-        <td>${fmt(r.spend, 'currency')}</td>
-        <td>${fmt(r.conversions, 'number')}</td>
-        <td>${r.costPerConversion ? fmt(r.costPerConversion, 'currency') : '—'}</td>
-        <td>${fmt(r.clicks, 'number')}</td>
-        <td>${r.ctr ? (r.ctr.toFixed(2) + '%') : '—'}</td>
-      </tr>`;
-    }).join('')}</tbody>
-  </table>`;
-  console.log('[DEBUG] ✅ Tabela renderizada com sucesso!');
+  wrap.innerHTML = `
+    <div class="table-header">
+      <span style="font-size:0.85rem;font-weight:600">Google Ads — 2026</span>
+      <div style="display:flex;gap:6px;margin-left:16px">
+        <button onclick="loadCampTable('campaign')" class="toggle-btn ${groupBy==='campaign'?'active':''}" id="btn-camp-campaign">Campanha</button>
+        <button onclick="loadCampTable('adgroup')"  class="toggle-btn ${groupBy==='adgroup' ?'active':''}" id="btn-camp-adgroup">Ad Group</button>
+        <button onclick="loadCampTable('keyword')"  class="toggle-btn ${groupBy==='keyword' ?'active':''}" id="btn-camp-keyword">Keyword</button>
+      </div>
+    </div>
+    <div style="padding:20px;color:#718096;font-size:0.85rem">Carregando...</div>`;
+
+  try {
+    const res  = await fetch('/api/p1/campaigns-enriched?groupBy=' + groupBy);
+    const data = await res.json();
+    const rows = data.campaigns || [];
+
+    const LABELS = { campaign: 'Campanha', adgroup: 'Ad Group', keyword: 'Keyword' };
+    const hasCtx = groupBy !== 'campaign'; // Ad Group e Keyword mostram coluna "Campanha" de contexto
+
+    const thead = `<tr>
+      <th>${LABELS[groupBy]}</th>
+      ${hasCtx ? '<th style="color:#718096">Campanha</th>' : ''}
+      <th>Spend (R$)</th><th>Conversões</th><th>Custo/Conv (R$)</th><th>Clicks</th><th>CTR (%)</th>
+    </tr>`;
+
+    const tbody = rows.length ? rows.map(r => `<tr>
+      <td>${r.name || '—'}</td>
+      ${hasCtx ? `<td style="color:#718096;font-size:0.8rem">${r.campaign || '—'}</td>` : ''}
+      <td>${fmt(r.spend, 'currency')}</td>
+      <td>${fmt(r.conversions, 'number')}</td>
+      <td>${r.costPerConversion ? fmt(r.costPerConversion, 'currency') : '—'}</td>
+      <td>${fmt(r.clicks, 'number')}</td>
+      <td>${r.ctr ? r.ctr.toFixed(2) + '%' : '—'}</td>
+    </tr>`).join('') : `<tr><td colspan="7" style="padding:20px;color:#718096">Sem dados para este nível.</td></tr>`;
+
+    wrap.innerHTML = `
+      <div class="table-header">
+        <span style="font-size:0.85rem;font-weight:600">Google Ads — 2026</span>
+        <div style="display:flex;gap:6px;margin-left:16px">
+          <button onclick="loadCampTable('campaign')" class="toggle-btn ${'campaign'===groupBy?'active':''}">Campanha</button>
+          <button onclick="loadCampTable('adgroup')"  class="toggle-btn ${'adgroup' ===groupBy?'active':''}">Ad Group</button>
+          <button onclick="loadCampTable('keyword')"  class="toggle-btn ${'keyword' ===groupBy?'active':''}">Keyword</button>
+        </div>
+      </div>
+      <div style="overflow-x:auto"><table><thead>${thead}</thead><tbody>${tbody}</tbody></table></div>`;
+  } catch (e) {
+    console.error('[loadCampTable] erro:', e);
+    wrap.innerHTML = `<div style="padding:20px;color:#fc8181">Erro ao carregar dados. ${e.message}</div>`;
+  }
 }
 
 // ── P2 ───────────────────────────────────────────────────────

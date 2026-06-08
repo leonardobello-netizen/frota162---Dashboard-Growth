@@ -734,54 +734,70 @@ async function buildCostMQLMonthly() {
   }
 }
 
-// ── Helper: Campanhas com conversões reais ──────────────────────
-async function buildCampaignsEnriched() {
-  // Retornar cache se ainda válido
-  if (memCache.campaigns && (Date.now() - memCache.campts < CACHE_TTL_SEPARATE)) {
-    console.log('[buildCampaignsEnriched] Retornando do cache de memória');
-    return memCache.campaigns;
+// ── Helper: Campanhas com conversões reais (suporta campaign/adgroup/keyword) ──
+async function buildCampaignsEnriched(groupBy = 'campaign') {
+  const cacheKey = `campaigns_${groupBy}`;
+  const tsKey    = `campts_${groupBy}`;
+
+  if (memCache[cacheKey] && (Date.now() - (memCache[tsKey] || 0) < CACHE_TTL_SEPARATE)) {
+    console.log(`[buildCampaignsEnriched] cache HIT: ${groupBy}`);
+    return memCache[cacheKey];
   }
 
+  // Mapeia groupBy para coluna real na tabela (nomes padrão Google Ads export)
+  const GROUP_COL = {
+    campaign: 'campaign_name',
+    adgroup:  'ad_group_name',
+    keyword:  'keyword_text'
+  };
+  const col = GROUP_COL[groupBy] || 'campaign_name';
+
+  // Para adgroup e keyword inclui campaign_name como coluna extra (contexto)
+  const extraCol = groupBy !== 'campaign' ? `, campaign_name` : '';
+
+  const sql = `
+    SELECT
+      ${col}${extraCol},
+      SUM(cost_brl)    AS spend,
+      SUM(conversions) AS conversions,
+      SUM(clicks)      AS clicks
+    FROM data_analytics.google_campaigns
+    WHERE YEAR(date) = 2026
+    GROUP BY ${col}${extraCol}
+    ORDER BY spend DESC
+  `;
+
   try {
-    // Busca conversões e spend por campanha no Metabase (2026)
-    const sql = `
-      SELECT
-        campaign_name,
-        SUM(cost_brl) as spend,
-        SUM(conversions) as conversions,
-        SUM(clicks) as clicks
-      FROM data_analytics.google_campaigns
-      WHERE YEAR(date) = 2026
-      GROUP BY campaign_name
-      ORDER BY spend DESC
-    `;
-
-    const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('Metabase timeout')), 15000)
-    );
-
     const metabaseRes = await Promise.race([
       metabaseQuery(sql),
-      timeoutPromise
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Metabase timeout')), 20000))
     ]);
 
-    const campaigns = metabaseRes.rows.map(row => ({
-      name: row[0] || 'Desconhecida',
-      spend: Math.round(parseFloat(row[1]) * 100) / 100,
-      conversions: Math.round(parseFloat(row[2]) * 100) / 100,
-      clicks: Math.round(parseFloat(row[3]) * 100) / 100,
-      ctr: (parseFloat(row[3]) && parseFloat(row[2])) ? Math.round((parseFloat(row[2]) / parseFloat(row[3])) * 10000) / 100 : 0,
-      costPerConversion: (parseFloat(row[2]) && parseFloat(row[1])) ? Math.round(parseFloat(row[1]) / parseFloat(row[2]) * 100) / 100 : null
-    }));
+    // Índices dependem se há coluna extra ou não
+    const hasExtra = groupBy !== 'campaign';
+    const rows = metabaseRes.rows.map(row => {
+      const name     = row[0] || '—';
+      const campaign = hasExtra ? row[1] : null;
+      const si       = hasExtra ? 2 : 1; // spend index
+      const spend    = Math.round(parseFloat(row[si])   * 100) / 100;
+      const convs    = Math.round(parseFloat(row[si+1]) * 100) / 100;
+      const clicks   = Math.round(parseFloat(row[si+2]) * 100) / 100;
+      return {
+        name,
+        campaign,
+        spend,
+        conversions: convs,
+        clicks,
+        ctr: (clicks && convs) ? Math.round((convs / clicks) * 10000) / 100 : 0,
+        costPerConversion: (convs && spend) ? Math.round(spend / convs * 100) / 100 : null
+      };
+    });
 
-    // Cachear resultado
-    memCache.campaigns = campaigns;
-    memCache.campts = Date.now();
-
-    return campaigns;
+    memCache[cacheKey] = rows;
+    memCache[tsKey]    = Date.now();
+    return rows;
   } catch (err) {
-    console.error('[buildCampaignsEnriched] Erro:', err.message);
-    // Retornar lista vazia ao invés de travar
+    console.error(`[buildCampaignsEnriched] Erro (${groupBy}):`, err.message);
     return [];
   }
 }
@@ -895,8 +911,10 @@ app.get('/api/p1/cost-mql-monthly', async (req, res) => {
 // Novo endpoint: Campanhas com conversões reais
 app.get('/api/p1/campaigns-enriched', async (req, res) => {
   try {
-    const data = await buildCampaignsEnriched();
-    res.json({ campaigns: data });
+    const groupBy = ['campaign', 'adgroup', 'keyword'].includes(req.query.groupBy)
+      ? req.query.groupBy : 'campaign';
+    const data = await buildCampaignsEnriched(groupBy);
+    res.json({ campaigns: data, groupBy });
   } catch (e) {
     console.error('Campaigns enriched error:', e.message);
     res.status(500).json({ error: e.message });
