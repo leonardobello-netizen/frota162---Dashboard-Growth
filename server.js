@@ -63,7 +63,8 @@ if (process.env.NODE_ENV !== 'test') {
 }
 
 // ── HubSpot IDs ───────────────────────────────────────────────
-const SUB_ORIGEM_META = 'Midia-Paga-Meta-Ads';
+const SUB_ORIGEM_META   = 'Midia-Paga-Meta-Ads';
+const SUB_ORIGEM_GOOGLE = 'Midia-Paga-Google-Ads';
 const PIPELINE_PRE_VENDAS = '691581102';
 const PIPELINE_SALES = 'default';
 const STAGE_REUNIAO = '1012021273';
@@ -307,16 +308,19 @@ async function buildP1() {
 
   // LEADS (7D) = All deals created in 7D window
   const leadsDealsRaw = allDealsRes || [];
-  console.log(`[P1] Leads Deals fetched: ${leadsDealsRaw.length} | Period: ${toYMD(d7ago)} to ${toYMD(today)}`);
+  console.log(`[P1] Leads Deals (todos pipeline): ${leadsDealsRaw.length} | Filtro KPI: sub_origem=${SUB_ORIGEM_GOOGLE} | Period: ${toYMD(d30ago)} to ${toYMD(today)}`);
 
   leadsDealsRaw.forEach(d => {
     const dt = toYMD(new Date(d.properties.createdate));
-    if (dt && dt <= yesterday) {
+    if (!dt || dt > yesterday) return;
+    const subOrigem = d.properties.sub_origem || '';
+    // Leads = sub_origem Google Ads (D-1, últimos 7D)
+    if (subOrigem === SUB_ORIGEM_GOOGLE) {
       dailyLeads[dt] = (dailyLeads[dt] || 0) + 1;
-      const subOrigem = (d.properties.sub_origem || '').toLowerCase();
-      if (subOrigem.includes('driva')) {
-        dailyDriva[dt] = (dailyDriva[dt] || 0) + 1;
-      }
+    }
+    // Driva detection (para flags no gráfico de volume)
+    if (subOrigem.toLowerCase().includes('driva')) {
+      dailyDriva[dt] = (dailyDriva[dt] || 0) + 1;
     }
   });
 
