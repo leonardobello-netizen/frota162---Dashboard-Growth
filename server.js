@@ -269,7 +269,7 @@ async function buildP1() {
         { propertyName: 'sub_origem',  operator: 'EQ',  value: SUB_ORIGEM_GOOGLE },
         { propertyName: 'createdate', operator: 'GTE', value: String(d90ago.getTime()) }
       ]}],
-      properties: ['createdate', 'dealname', 'qual_a_quantidade_de_veiculos_na_suas_frota_']
+      properties: ['createdate', 'dealname', 'qual_a_quantidade_de_veiculos_na_sua_frota_']
     }).catch(e => { console.error('[buildP1] frota erro:', e.message); return []; }),
     // 4. Spend Metabase (por dia, para gráficos de custo)
     loadGoogleCampaignsFromMetabase(d90ago, today).catch(e => { console.error('[buildP1] spend erro:', e.message); return []; }),
