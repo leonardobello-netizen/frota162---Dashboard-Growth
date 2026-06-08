@@ -234,14 +234,15 @@ async function buildP1() {
   const datePrev = new Date(monthStartPrev.getFullYear(), monthStartPrev.getMonth(), lastMonthDay);
 
   // ── Todas as queries em PARALELO — reduz ~3min → ~40s ────────
-  console.log('[buildP1] Iniciando 6 queries em paralelo...');
+  console.log('[buildP1] Iniciando 7 queries em paralelo...');
   const [
     allDealsRes,
     mqlDealsRes,
     contactsRaw,
     googleCampaigns,
     reunioesRaw,
-    reunioesPrevRes
+    reunioesPrevRes,
+    campaignsAgg
   ] = await Promise.all([
     // 1. Todos os deals 30d (leads + driva detection)
     hsSearchAll('deals', {
@@ -268,10 +269,10 @@ async function buildP1() {
         { propertyName: 'sub_origem',  operator: 'EQ',  value: SUB_ORIGEM_GOOGLE },
         { propertyName: 'createdate', operator: 'GTE', value: String(d90ago.getTime()) }
       ]}],
-      properties: ['createdate', 'dealname', 'qual_a_quantidade_de_veiculos_na_sua_frota_']
+      properties: ['createdate', 'dealname', 'qual_a_quantidade_de_veiculos_na_suas_frota_']
     }).catch(e => { console.error('[buildP1] frota erro:', e.message); return []; }),
-    // 4. Spend Metabase
-    loadGoogleCampaignsFromMetabase(d90ago, today),
+    // 4. Spend Metabase (por dia, para gráficos de custo)
+    loadGoogleCampaignsFromMetabase(d90ago, today).catch(e => { console.error('[buildP1] spend erro:', e.message); return []; }),
     // 5. Reuniões 7D
     hsSearchAll('deals', {
       filterGroups: [{ filters: [
@@ -292,9 +293,20 @@ async function buildP1() {
       ]}],
       properties: ['createdate'],
       limit: 100
-    })
+    }),
+    // 7. Campanhas agregadas (30d) — com conversões e clicks do Metabase
+    metabaseQuery(`
+      SELECT campaign_name,
+             SUM(cost_brl)    AS spend,
+             SUM(conversions) AS conversions,
+             SUM(clicks)      AS clicks
+      FROM data_analytics.google_campaigns
+      WHERE date >= date_add('day', -30, current_date)
+      GROUP BY campaign_name
+      ORDER BY spend DESC
+    `).catch(e => { console.error('[buildP1] campaignsAgg erro:', e.message); return null; })
   ]);
-  console.log(`[buildP1] ✅ Paralelo concluído — leads:${allDealsRes.length} mql:${mqlDealsRes.length} frota:${contactsRaw.length} googleRows:${googleCampaigns.length} reunioes:${reunioesRaw.length}`);
+  console.log(`[buildP1] ✅ Paralelo concluído — leads:${allDealsRes.length} mql:${mqlDealsRes.length} frota:${contactsRaw.length} googleRows:${googleCampaigns.length} reunioes:${reunioesRaw.length} campaignsAgg:${campaignsAgg?.rows?.length ?? 'erro'}`);
 
   const mqlDealsRaw = mqlDealsRes || [];
 
@@ -514,28 +526,47 @@ async function buildP1() {
   }
 
   // --- Tabela campanhas (30d) ---
-  const cutoff30 = addDays(today, -30);
-  const campMap = {};
-  googleCampaigns.forEach(row => {
-    const dt = typeof row.date === 'string' ? new Date(row.date) : row.date;
-    if (dt < cutoff30) return;
-    const camp = row.campaign_name || 'Desconhecida';
-    if (!campMap[camp]) campMap[camp] = { spend: 0, leads: 0, mql: 0 };
-    campMap[camp].spend += row.cost_brl;
-  });
-
-  // Metabase google_campaigns não tem coluna "conversions" separada, então leads=0
-  // Para futuro: enriquecer com dados de conversões do Metabase se necessário
-  const campTable = Object.entries(campMap)
-    .map(([name, d]) => ({
-      name,
-      spend: Math.round(d.spend * 100) / 100,
-      leads: 0,
-      costPerLead: null,
-      mql: 0,
-      costPerMQL: null
-    }))
-    .sort((a, b) => b.spend - a.spend);
+  let campTable = [];
+  if (campaignsAgg && campaignsAgg.rows && campaignsAgg.rows.length > 0) {
+    // Dados ricos do Metabase: spend + conversions + clicks
+    campTable = campaignsAgg.rows.map(row => {
+      const name  = row[0] || '—';
+      const spend = Math.round(parseFloat(row[1] || 0) * 100) / 100;
+      const convs = Math.round(parseFloat(row[2] || 0) * 100) / 100;
+      const clicks = Math.round(parseFloat(row[3] || 0) * 100) / 100;
+      return {
+        name,
+        spend,
+        conversions: convs,
+        clicks,
+        ctr: (clicks > 0) ? Math.round((convs / clicks) * 10000) / 100 : 0,
+        costPerConversion: (convs > 0 && spend > 0) ? Math.round(spend / convs * 100) / 100 : null
+      };
+    });
+    console.log(`[buildP1] campTable: ${campTable.length} campanhas (Metabase ✅)`);
+  } else {
+    // Fallback: apenas spend por campanha (sem conversions/clicks)
+    const cutoff30 = addDays(today, -30);
+    const campMap = {};
+    googleCampaigns.forEach(row => {
+      const dt = typeof row.date === 'string' ? new Date(row.date) : row.date;
+      if (dt < cutoff30) return;
+      const camp = row.campaign_name || 'Desconhecida';
+      if (!campMap[camp]) campMap[camp] = { spend: 0 };
+      campMap[camp].spend += row.cost_brl;
+    });
+    campTable = Object.entries(campMap)
+      .map(([name, d]) => ({
+        name,
+        spend: Math.round(d.spend * 100) / 100,
+        conversions: null,
+        clicks: null,
+        ctr: null,
+        costPerConversion: null
+      }))
+      .sort((a, b) => b.spend - a.spend);
+    console.log(`[buildP1] campTable: ${campTable.length} campanhas (fallback sem conversões)`);
+  }
 
   console.log(`[buildP1] g1MQL (Google Ads Reunião, first 10 values):`, g1MQL.slice(0, 10));
 

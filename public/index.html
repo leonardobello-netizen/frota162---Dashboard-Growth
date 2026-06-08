@@ -308,9 +308,15 @@ async function loadP1() {
     console.log('[DEBUG] Revelando sec-cpmql...');
     reveal('sec-cpmql');
 
-    // 5. Tabela de campanhas enriquecida
+    // 5. Tabela de campanhas — usa campTable que vem no P1 (cache 24h)
     await nextFrame();
-    await loadCampTable('campaign');
+    if (data.campTable && data.campTable.length > 0) {
+      _p1CampData = data.campTable;
+      renderCampTable(data.campTable, 'campaign');
+    } else {
+      // fallback: tenta endpoint separado
+      await loadCampTable('campaign');
+    }
     reveal('sec-camp');
 
     console.log('[DEBUG] ✅ loadP1() completado com sucesso!');
@@ -472,20 +478,65 @@ function renderCostMQLMonthly(data) {
 
 let _campCurrentGroup = 'campaign';
 
-async function loadCampTable(groupBy) {
-  _campCurrentGroup = groupBy;
+// Dados de campanha-level vêm do P1 (cache 24h); adgroup/keyword vêm do endpoint separado
+let _p1CampData = null; // cache local da view "campaign" que vem do P1
+
+function renderCampTable(rows, groupBy) {
   const wrap = document.getElementById('camp-table-wrap');
   if (!wrap) return;
 
-  // Mostra loading enquanto busca
+  const LABELS = { campaign: 'Campanha', adgroup: 'Ad Group', keyword: 'Keyword' };
+  const hasCtx = groupBy !== 'campaign';
+
+  const thead = `<tr>
+    <th>${LABELS[groupBy]}</th>
+    ${hasCtx ? '<th style="color:#718096;font-size:0.75rem">Campanha</th>' : ''}
+    <th>Investimento (R$)</th><th>Conversões</th><th>Custo/Conv (R$)</th><th>Clicks</th><th>CTR (%)</th>
+  </tr>`;
+
+  const tbody = rows.length ? rows.map(r => `<tr>
+    <td style="max-width:280px;word-break:break-word">${r.name || '—'}</td>
+    ${hasCtx ? `<td style="color:#718096;font-size:0.78rem;max-width:200px;word-break:break-word">${r.campaign || '—'}</td>` : ''}
+    <td>${r.spend != null ? fmt(r.spend, 'currency') : '—'}</td>
+    <td>${r.conversions != null ? fmt(r.conversions, 'number') : '—'}</td>
+    <td>${r.costPerConversion != null ? fmt(r.costPerConversion, 'currency') : '—'}</td>
+    <td>${r.clicks != null ? fmt(r.clicks, 'number') : '—'}</td>
+    <td>${r.ctr != null ? r.ctr.toFixed(2) + '%' : '—'}</td>
+  </tr>`).join('') : `<tr><td colspan="7" style="padding:20px;color:#718096">Sem dados disponíveis.</td></tr>`;
+
   wrap.className = 'table-card';
   wrap.innerHTML = `
     <div class="table-header">
       <span style="font-size:0.85rem;font-weight:600">Google Ads — últimos 30 dias</span>
       <div style="display:flex;gap:6px;margin-left:16px">
-        <button onclick="loadCampTable('campaign')" class="toggle-btn ${groupBy==='campaign'?'active':''}" id="btn-camp-campaign">Campanha</button>
-        <button onclick="loadCampTable('adgroup')"  class="toggle-btn ${groupBy==='adgroup' ?'active':''}" id="btn-camp-adgroup">Ad Group</button>
-        <button onclick="loadCampTable('keyword')"  class="toggle-btn ${groupBy==='keyword' ?'active':''}" id="btn-camp-keyword">Keyword</button>
+        <button onclick="loadCampTable('campaign')" class="toggle-btn ${'campaign'===groupBy?'active':''}">Campanha</button>
+        <button onclick="loadCampTable('adgroup')"  class="toggle-btn ${'adgroup' ===groupBy?'active':''}">Ad Group</button>
+        <button onclick="loadCampTable('keyword')"  class="toggle-btn ${'keyword' ===groupBy?'active':''}">Keyword</button>
+      </div>
+    </div>
+    <div style="overflow-x:auto"><table><thead>${thead}</thead><tbody>${tbody}</tbody></table></div>`;
+}
+
+async function loadCampTable(groupBy) {
+  _campCurrentGroup = groupBy;
+  const wrap = document.getElementById('camp-table-wrap');
+  if (!wrap) return;
+
+  // Campanha-level: usa dados já carregados do P1 (sem fetch extra)
+  if (groupBy === 'campaign' && _p1CampData) {
+    renderCampTable(_p1CampData, 'campaign');
+    return;
+  }
+
+  // Ad Group / Keyword: busca do endpoint separado
+  wrap.className = 'table-card';
+  wrap.innerHTML = `
+    <div class="table-header">
+      <span style="font-size:0.85rem;font-weight:600">Google Ads — últimos 30 dias</span>
+      <div style="display:flex;gap:6px;margin-left:16px">
+        <button onclick="loadCampTable('campaign')" class="toggle-btn ${'campaign'===groupBy?'active':''}">Campanha</button>
+        <button onclick="loadCampTable('adgroup')"  class="toggle-btn ${'adgroup' ===groupBy?'active':''}">Ad Group</button>
+        <button onclick="loadCampTable('keyword')"  class="toggle-btn ${'keyword' ===groupBy?'active':''}">Keyword</button>
       </div>
     </div>
     <div style="padding:20px;color:#718096;font-size:0.85rem">Carregando...</div>`;
@@ -493,30 +544,10 @@ async function loadCampTable(groupBy) {
   try {
     const res  = await fetch('/api/p1/campaigns-enriched?groupBy=' + groupBy);
     const data = await res.json();
-    if (!res.ok || data.error) {
-      throw new Error(data.error || `HTTP ${res.status}`);
-    }
-    const rows = data.campaigns || [];
-
-    const LABELS = { campaign: 'Campanha', adgroup: 'Ad Group', keyword: 'Keyword' };
-    const hasCtx = groupBy !== 'campaign'; // Ad Group e Keyword mostram coluna "Campanha" de contexto
-
-    const thead = `<tr>
-      <th>${LABELS[groupBy]}</th>
-      ${hasCtx ? '<th style="color:#718096">Campanha</th>' : ''}
-      <th>Spend (R$)</th><th>Conversões</th><th>Custo/Conv (R$)</th><th>Clicks</th><th>CTR (%)</th>
-    </tr>`;
-
-    const tbody = rows.length ? rows.map(r => `<tr>
-      <td>${r.name || '—'}</td>
-      ${hasCtx ? `<td style="color:#718096;font-size:0.8rem">${r.campaign || '—'}</td>` : ''}
-      <td>${fmt(r.spend, 'currency')}</td>
-      <td>${fmt(r.conversions, 'number')}</td>
-      <td>${r.costPerConversion ? fmt(r.costPerConversion, 'currency') : '—'}</td>
-      <td>${fmt(r.clicks, 'number')}</td>
-      <td>${r.ctr ? r.ctr.toFixed(2) + '%' : '—'}</td>
-    </tr>`).join('') : `<tr><td colspan="7" style="padding:20px;color:#718096">Sem dados para este nível.</td></tr>`;
-
+    if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+    renderCampTable(data.campaigns || [], groupBy);
+  } catch (e) {
+    console.error('[loadCampTable] erro:', e);
     wrap.innerHTML = `
       <div class="table-header">
         <span style="font-size:0.85rem;font-weight:600">Google Ads — últimos 30 dias</span>
@@ -526,10 +557,7 @@ async function loadCampTable(groupBy) {
           <button onclick="loadCampTable('keyword')"  class="toggle-btn ${'keyword' ===groupBy?'active':''}">Keyword</button>
         </div>
       </div>
-      <div style="overflow-x:auto"><table><thead>${thead}</thead><tbody>${tbody}</tbody></table></div>`;
-  } catch (e) {
-    console.error('[loadCampTable] erro:', e);
-    wrap.innerHTML = `<div style="padding:20px;color:#fc8181">Erro ao carregar dados. ${e.message}</div>`;
+      <div style="padding:20px;color:#fc8181;font-size:0.85rem">⚠️ Metabase indisponível. ${e.message}</div>`;
   }
 }
 
