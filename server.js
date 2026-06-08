@@ -159,17 +159,24 @@ async function hsSearchAll(objectType, body) {
 // ── Metabase query helper ─────────────────────────────────────
 async function metabaseQuery(sql) {
   const agent = new https.Agent({ rejectUnauthorized: false });
-  const h = { headers: { 'x-api-key': MB_KEY, 'Content-Type': 'application/json' }, httpsAgent: agent, timeout: 60000 };
+  const h = { headers: { 'x-api-key': MB_KEY, 'Content-Type': 'application/json' }, httpsAgent: agent, timeout: 90000 };
   const res = await axios.post(MB_URL + '/api/dataset', {
     database: 2,
     type: 'native',
     native: { query: sql }
   }, h);
-  return { cols: res.data.data?.cols?.map(c => c.name) || [], rows: res.data.data?.rows || [] };
+  // Detecta erros no corpo da resposta (Metabase retorna HTTP 200 mesmo com erro de query/DB)
+  if (res.data.error) {
+    console.error('[metabaseQuery] Body error:', res.data.error);
+    throw new Error('Metabase query error: ' + res.data.error);
+  }
+  const rows = res.data.data?.rows || [];
+  const cols = res.data.data?.cols?.map(c => c.name) || [];
+  console.log(`[metabaseQuery] OK — ${rows.length} linhas, cols: ${cols.join(', ')}`);
+  return { cols, rows };
 }
 
 async function loadGoogleCampaignsFromMetabase(fromDate, toDate) {
-  // Returns array of {date, cost_brl, campaign_name} for spend by day and campaign
   const sql = `
     SELECT
       CAST(date AS DATE) as date,
@@ -182,9 +189,12 @@ async function loadGoogleCampaignsFromMetabase(fromDate, toDate) {
   `;
   try {
     const res = await metabaseQuery(sql);
+    if (!res.rows.length) {
+      console.warn('[loadGoogleCampaignsFromMetabase] Retornou 0 linhas para', toYMD(fromDate), '→', toYMD(toDate));
+    }
     return res.rows.map(r => ({ date: r[0], cost_brl: parseFloat(r[1]) || 0, campaign_name: r[2] }));
   } catch (e) {
-    console.error('[loadGoogleCampaignsFromMetabase] Error:', e.message);
+    console.error('[loadGoogleCampaignsFromMetabase] Erro:', e.message);
     return [];
   }
 }
@@ -956,6 +966,32 @@ app.get('/api/p1/cost-mql-monthly', async (req, res) => {
     console.error('[API] Cost MQL monthly error:', e.message);
     res.status(500).json({ error: e.message });
   }
+});
+
+// Diagnóstico Metabase — testa conectividade e retorna dados brutos
+app.get('/api/debug/metabase', async (req, res) => {
+  const results = {};
+  try {
+    results.health = await axios.get(MB_URL + '/api/health', {
+      httpsAgent: new https.Agent({ rejectUnauthorized: false }), timeout: 10000
+    }).then(r => r.data).catch(e => ({ error: e.message, status: e.response?.status }));
+
+    results.simpleQuery = await metabaseQuery(
+      'SELECT COUNT(*) as total FROM data_analytics.google_campaigns WHERE YEAR(date) = 2026'
+    ).catch(e => ({ error: e.message }));
+
+    results.sampleRows = await metabaseQuery(
+      'SELECT date, cost_brl, campaign_name FROM data_analytics.google_campaigns ORDER BY date DESC LIMIT 3'
+    ).catch(e => ({ error: e.message }));
+
+    results.monthlySpend = await metabaseQuery(
+      "SELECT date_trunc('month', date) as mes, SUM(cost_brl) as spend FROM data_analytics.google_campaigns WHERE YEAR(date) = 2026 GROUP BY 1 ORDER BY 1"
+    ).catch(e => ({ error: e.message }));
+
+  } catch (e) {
+    results.fatalError = e.message;
+  }
+  res.json(results);
 });
 
 // Novo endpoint: Campanhas com conversões reais
