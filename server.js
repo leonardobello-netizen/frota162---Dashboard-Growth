@@ -244,21 +244,21 @@ async function buildP1() {
     reunioesPrevRes,
     campaignsAgg
   ] = await Promise.all([
-    // 1. Todos os deals 30d (leads + driva detection)
+    // 1. Deals desde início do mês anterior (cobre MTD + LMTD para KPIs + últimos 30d para gráfico)
     hsSearchAll('deals', {
       filterGroups: [{ filters: [
         { propertyName: 'pipeline',   operator: 'EQ',  value: PIPELINE_PRE_VENDAS },
-        { propertyName: 'createdate', operator: 'GTE', value: String(d30ago.getTime()) },
+        { propertyName: 'createdate', operator: 'GTE', value: String(monthStartPrev.getTime()) },
         { propertyName: 'createdate', operator: 'LTE', value: String(today.getTime()) }
       ]}],
       properties: ['createdate', 'dealname', 'sub_origem', 'dealstage']
     }),
-    // 2. MQL 30d (Meta Ads)
+    // 2. MQL desde início do mês anterior (Meta Ads — KPI MQL)
     hsSearchAll('deals', {
       filterGroups: [{ filters: [
         { propertyName: 'pipeline',   operator: 'EQ',  value: PIPELINE_PRE_VENDAS },
         { propertyName: 'sub_origem', operator: 'EQ',  value: SUB_ORIGEM_META },
-        { propertyName: 'createdate', operator: 'GTE', value: String(d30ago.getTime()) },
+        { propertyName: 'createdate', operator: 'GTE', value: String(monthStartPrev.getTime()) },
         { propertyName: 'createdate', operator: 'LTE', value: String(today.getTime()) }
       ]}],
       properties: ['createdate', 'sub_origem']
@@ -321,7 +321,7 @@ async function buildP1() {
 
   // LEADS (7D) = All deals created in 7D window
   const leadsDealsRaw = allDealsRes || [];
-  console.log(`[P1] Leads Deals (todos pipeline): ${leadsDealsRaw.length} | Filtro KPI: sub_origem=${SUB_ORIGEM_GOOGLE} | Period: ${toYMD(d30ago)} to ${toYMD(today)}`);
+  console.log(`[P1] Leads Deals (todos pipeline): ${leadsDealsRaw.length} | Filtro KPI: sub_origem=${SUB_ORIGEM_GOOGLE} | Period: ${toYMD(monthStartPrev)} to ${toYMD(today)}`);
 
   leadsDealsRaw.forEach(d => {
     const dt = toYMD(new Date(d.properties.createdate));
@@ -398,13 +398,14 @@ async function buildP1() {
 
   // --- KPIs ---
   console.log(`[P1] Final KPI values: leadsMTD=${leadsMTD}, mqlMTD=${mqlMTD}, leadsPrev=${leadsPrev}, mqlPrev=${mqlPrev}`);
+  const metabaseOk = spendMTD > 0 || spendPrev > 0; // false = Metabase indisponível
   const kpis = [
-    { label: 'Leads', value: leadsMTD, delta: pct(leadsMTD, leadsPrev), format: 'number' },
-    { label: 'MQL', value: mqlMTD, delta: pct(mqlMTD, mqlPrev), format: 'number' },
-    { label: 'Reunião', value: reuniao7d, delta: pct(reuniao7d, reuniaoPrev), format: 'number' },
-    { label: 'Investimento', value: spendMTD, delta: pct(spendMTD, spendPrev), format: 'currency' },
-    { label: 'Custo/Lead', value: costPerLead7d, delta: pct(costPerLead7d, costPerLeadPrev), format: 'currency', invertDelta: true },
-    { label: 'Custo/MQL', value: costPerMQL7d, delta: pct(costPerMQL7d, costPerMQLPrev), format: 'currency', invertDelta: true }
+    { label: 'Leads',        value: leadsMTD,       delta: pct(leadsMTD, leadsPrev),             format: 'number' },
+    { label: 'MQL',          value: mqlMTD,         delta: pct(mqlMTD, mqlPrev),                 format: 'number' },
+    { label: 'Reunião',      value: reuniao7d,       delta: pct(reuniao7d, reuniaoPrev),           format: 'number' },
+    { label: 'Investimento', value: metabaseOk ? spendMTD : null,     delta: metabaseOk ? pct(spendMTD, spendPrev) : null,                format: 'currency', metabaseWarn: !metabaseOk },
+    { label: 'Custo/Lead',   value: metabaseOk ? costPerLead7d : null, delta: metabaseOk ? pct(costPerLead7d, costPerLeadPrev) : null,   format: 'currency', invertDelta: true, metabaseWarn: !metabaseOk },
+    { label: 'Custo/MQL',   value: metabaseOk ? costPerMQL7d : null,  delta: metabaseOk ? pct(costPerMQL7d, costPerMQLPrev) : null,     format: 'currency', invertDelta: true, metabaseWarn: !metabaseOk }
   ];
 
   // --- Gráfico 1: Leads e MQL diários últimos 30d ---
