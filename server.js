@@ -232,84 +232,69 @@ async function buildP1() {
   const lastMonthDay = Math.min(currentDay, lastMonthMaxDay);
   const datePrev = new Date(monthStartPrev.getFullYear(), monthStartPrev.getMonth(), lastMonthDay);
 
-  // --- LEADS (7D) = Unique contacts that created ANY deal in 7D window ---
-  // These are all the leads that came in during the period
-  console.log('[buildP1] About to fetch all deals...');
-  // Busca 30d para alimentar KPIs (7D) e gráfico de volume (30D, começa em 09/05)
-  const allDealsRes = await hsSearchAll('deals', {
-    filterGroups: [{
-      filters: [
-        { propertyName: 'pipeline', operator: 'EQ', value: PIPELINE_PRE_VENDAS },
+  // ── Todas as queries em PARALELO — reduz ~3min → ~40s ────────
+  console.log('[buildP1] Iniciando 6 queries em paralelo...');
+  const [
+    allDealsRes,
+    mqlDealsRes,
+    contactsRaw,
+    googleCampaigns,
+    reunioesRaw,
+    reunioesPrevRes
+  ] = await Promise.all([
+    // 1. Todos os deals 30d (leads + driva detection)
+    hsSearchAll('deals', {
+      filterGroups: [{ filters: [
+        { propertyName: 'pipeline',   operator: 'EQ',  value: PIPELINE_PRE_VENDAS },
         { propertyName: 'createdate', operator: 'GTE', value: String(d30ago.getTime()) },
         { propertyName: 'createdate', operator: 'LTE', value: String(today.getTime()) }
-      ]
-    }],
-    properties: ['createdate', 'dealname', 'sub_origem']
-  });
-
-  // --- MQL (30D) = Deals no pipeline Pré-Vendas com sub_origem = Meta Ads ---
-  const mqlDealsRes = await hsSearchAll('deals', {
-    filterGroups: [{
-      filters: [
-        { propertyName: 'pipeline', operator: 'EQ', value: PIPELINE_PRE_VENDAS },
-        { propertyName: 'sub_origem', operator: 'EQ', value: SUB_ORIGEM_META },
+      ]}],
+      properties: ['createdate', 'dealname', 'sub_origem']
+    }),
+    // 2. MQL 30d (Meta Ads)
+    hsSearchAll('deals', {
+      filterGroups: [{ filters: [
+        { propertyName: 'pipeline',   operator: 'EQ',  value: PIPELINE_PRE_VENDAS },
+        { propertyName: 'sub_origem', operator: 'EQ',  value: SUB_ORIGEM_META },
         { propertyName: 'createdate', operator: 'GTE', value: String(d30ago.getTime()) },
         { propertyName: 'createdate', operator: 'LTE', value: String(today.getTime()) }
-      ]
-    }],
-    properties: ['createdate', 'sub_origem']
-  });
-
-  // Fetch deals with associated companies (which have frota/size info)
-  console.log('[buildP1] About to fetch deals with company info for frota quality...');
-  const dealsForFrotaRes = await hsSearchAll('deals', {
-    filterGroups: [{
-      filters: [
+      ]}],
+      properties: ['createdate', 'sub_origem']
+    }),
+    // 3. Frota 90d — query única (antes eram duas queries idênticas)
+    hsSearchAll('deals', {
+      filterGroups: [{ filters: [
         { propertyName: 'createdate', operator: 'GTE', value: String(d90ago.getTime()) }
-      ]
-    }],
-    properties: [
-      'createdate',
-      'dealname',
-      'associations'  // To get associated company
-    ]
-  }).catch(e => {
-    console.error('[buildP1] Error fetching deals for frota:', e.message);
-    return [];
-  });
+      ]}],
+      properties: ['createdate', 'dealname', 'qual_a_quantidade_de_veiculos_na_sua_frota_']
+    }).catch(e => { console.error('[buildP1] frota erro:', e.message); return []; }),
+    // 4. Spend Metabase
+    loadGoogleCampaignsFromMetabase(d90ago, today),
+    // 5. Reuniões 7D
+    hsSearchAll('deals', {
+      filterGroups: [{ filters: [
+        { propertyName: 'pipeline',   operator: 'EQ',  value: PIPELINE_PRE_VENDAS },
+        { propertyName: 'dealstage',  operator: 'EQ',  value: STAGE_REUNIAO },
+        { propertyName: 'createdate', operator: 'GTE', value: String(d7ago.getTime()) },
+        { propertyName: 'createdate', operator: 'LTE', value: String(today.getTime()) }
+      ]}],
+      properties: ['createdate']
+    }),
+    // 6. Reuniões mês anterior
+    hsSearch('deals', {
+      filterGroups: [{ filters: [
+        { propertyName: 'pipeline',   operator: 'EQ',  value: PIPELINE_PRE_VENDAS },
+        { propertyName: 'dealstage',  operator: 'EQ',  value: STAGE_REUNIAO },
+        { propertyName: 'createdate', operator: 'GTE', value: String(monthStartPrev.getTime()) },
+        { propertyName: 'createdate', operator: 'LTE', value: String(addDays(datePrev, 1).getTime()) }
+      ]}],
+      properties: ['createdate'],
+      limit: 100
+    })
+  ]);
+  console.log(`[buildP1] ✅ Paralelo concluído — leads:${allDealsRes.length} mql:${mqlDealsRes.length} frota:${contactsRaw.length} googleRows:${googleCampaigns.length} reunioes:${reunioesRaw.length}`);
 
-  console.log('[buildP1] Deals for frota fetched:', dealsForFrotaRes.length);
-
-  // For frota chart, we'll use a simplified approach:
-  // Create random distribution based on deal count since frota field doesn't exist
-  // This ensures all ranges are populated as requested
-  const totalDeals = dealsForFrotaRes.length;
-
-  // Fetch deals with frota field from deals (not contacts)
-  console.log('[buildP1] About to fetch deals with frota field...');
-  const contactsRaw = await hsSearchAll('deals', {
-    filterGroups: [{
-      filters: [
-        { propertyName: 'createdate', operator: 'GTE', value: String(d90ago.getTime()) }
-      ]
-    }],
-    properties: [
-      'createdate',
-      'dealname',
-      'qual_a_quantidade_de_veiculos_na_sua_frota_'  // The actual frota field in deals
-    ]
-  }).catch(e => {
-    console.error('[buildP1] Error fetching deals with frota:', e.message);
-    return allDealsRes || [];
-  });
-
-  console.log(`[P1] Deals with frota field fetched: ${contactsRaw.length}`);
   const mqlDealsRaw = mqlDealsRes || [];
-  console.log(`[P1] MQL deals RAW count from hsSearchAll: ${mqlDealsRaw.length}`);
-
-  // --- Metabase Google Campaigns data ---
-  const googleCampaigns = await loadGoogleCampaignsFromMetabase(d90ago, today);
-  console.log(`[P1] Google Campaigns rows from Metabase: ${googleCampaigns.length}`);
 
   // Build daily maps
   const dailyLeads = {}; // date -> count (all deals)
@@ -390,38 +375,10 @@ async function buildP1() {
   const costPerLeadPrev = leads7dPrev ? spend7dPrev / leads7dPrev : 0;
   const costPerMQLPrev = mql7dPrev ? spend7dPrev / mql7dPrev : 0;
 
-  // --- Reuniões (7d) - filtered to D-1 ---
-  // Use hsSearchAll to fetch ALL reuniões (no limit on pagination)
-  const reunioesRaw = await hsSearchAll('deals', {
-    filterGroups: [{
-      filters: [
-        { propertyName: 'pipeline', operator: 'EQ', value: PIPELINE_PRE_VENDAS },
-        { propertyName: 'dealstage', operator: 'EQ', value: STAGE_REUNIAO },
-        { propertyName: 'createdate', operator: 'GTE', value: String(d7ago.getTime()) },
-        { propertyName: 'createdate', operator: 'LTE', value: String(today.getTime()) }
-      ]
-    }],
-    properties: ['createdate']
-  });
-  console.log(`[P1] Reuniões fetched (7D) com hsSearchAll: ${reunioesRaw.length}`);
   const reuniao7d = reunioesRaw.length;
-
-  // Use hsSearch (singular, first page only) to avoid over-pagination
-  const reunioesPrevRes = await hsSearch('deals', {
-    filterGroups: [{
-      filters: [
-        { propertyName: 'pipeline', operator: 'EQ', value: PIPELINE_PRE_VENDAS },
-        { propertyName: 'dealstage', operator: 'EQ', value: STAGE_REUNIAO },
-        { propertyName: 'createdate', operator: 'GTE', value: String(monthStartPrev.getTime()) },
-        { propertyName: 'createdate', operator: 'LTE', value: String(addDays(datePrev, 1).getTime()) }
-      ]
-    }],
-    properties: ['createdate'],
-    limit: 100
-  });
-  const reunioesPrevRaw = reunioesPrevRes.results || [];
-  console.log(`[P1] Reuniões fetched (Previous period): ${reunioesPrevRaw.length}`);
+  const reunioesPrevRaw = (reunioesPrevRes && reunioesPrevRes.results) ? reunioesPrevRes.results : (Array.isArray(reunioesPrevRes) ? reunioesPrevRes : []);
   const reuniaoPrev = reunioesPrevRaw.length;
+  console.log(`[P1] Reuniões — 7D: ${reuniao7d} | anterior: ${reuniaoPrev}`);
 
   // --- KPIs ---
   console.log(`[P1] Final KPI values: leads7d=${leads7d}, mql7d=${mql7d}, leads7dPrev=${leads7dPrev}, mql7dPrev=${mql7dPrev}`);
@@ -621,36 +578,35 @@ async function buildP2() {
   const d24mAgo = new Date(today);
   d24mAgo.setMonth(d24mAgo.getMonth() - 24);
 
-  // HubSpot deals Sales (won) last 24 months - filtered to D-1
-  const wonDeals = await hsSearchAll('deals', {
-    filterGroups: [{
-      filters: [
-        { propertyName: 'pipeline', operator: 'EQ', value: PIPELINE_SALES },
-        { propertyName: 'dealstage', operator: 'EQ', value: 'closedwon' },
-        { propertyName: 'closedate', operator: 'GTE', value: String(d24mAgo.getTime()) },
-        { propertyName: 'closedate', operator: 'LTE', value: String(today.getTime()) }
-      ]
-    }],
-    properties: ['closedate', 'amount', 'dealname'],
-    limit: 100
-  });
-
-  // HubSpot deals Pré-Vendas + sub_origem Meta Ads — 24 meses (fonte da verdade)
-  const pvDeals = await hsSearchAll('deals', {
-    filterGroups: [{
-      filters: [
+  // ── 3 queries em PARALELO ─────────────────────────────────────
+  console.log('[buildP2] Iniciando 3 queries em paralelo...');
+  const [wonDeals, pvDeals, googleCampaigns] = await Promise.all([
+    // 1. Deals Sales ganhos (24m)
+    hsSearchAll('deals', {
+      filterGroups: [{ filters: [
+        { propertyName: 'pipeline',   operator: 'EQ',  value: PIPELINE_SALES },
+        { propertyName: 'dealstage',  operator: 'EQ',  value: 'closedwon' },
+        { propertyName: 'closedate',  operator: 'GTE', value: String(d24mAgo.getTime()) },
+        { propertyName: 'closedate',  operator: 'LTE', value: String(today.getTime()) }
+      ]}],
+      properties: ['closedate', 'amount', 'dealname'],
+      limit: 100
+    }),
+    // 2. Deals Pré-Vendas Meta Ads (24m)
+    hsSearchAll('deals', {
+      filterGroups: [{ filters: [
         { propertyName: 'pipeline',   operator: 'EQ',  value: PIPELINE_PRE_VENDAS },
         { propertyName: 'sub_origem', operator: 'EQ',  value: SUB_ORIGEM_META },
         { propertyName: 'createdate', operator: 'GTE', value: String(d24mAgo.getTime()) },
         { propertyName: 'createdate', operator: 'LTE', value: String(today.getTime()) }
-      ]
-    }],
-    properties: ['createdate', 'dealstage', 'amount'],
-    limit: 100
-  });
-
-  // Metabase spend by month (D-1 cutoff)
-  const googleCampaigns = await loadGoogleCampaignsFromMetabase(d24mAgo, today);
+      ]}],
+      properties: ['createdate', 'dealstage', 'amount'],
+      limit: 100
+    }),
+    // 3. Spend Metabase (24m)
+    loadGoogleCampaignsFromMetabase(d24mAgo, today)
+  ]);
+  console.log(`[buildP2] ✅ Paralelo concluído — wonDeals:${wonDeals.length} pvDeals:${pvDeals.length} googleRows:${googleCampaigns.length}`);
   const spendByMonth = {};
   const yesterdayStr = toYMD(today);
   googleCampaigns.forEach(row => {
