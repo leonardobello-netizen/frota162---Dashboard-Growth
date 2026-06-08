@@ -308,15 +308,9 @@ async function loadP1() {
     console.log('[DEBUG] Revelando sec-cpmql...');
     reveal('sec-cpmql');
 
-    // 5. Tabela de campanhas — usa campTable que vem no P1 (cache 24h)
+    // 5. Tabela de campanhas enriquecida
     await nextFrame();
-    if (data.campTable && data.campTable.length > 0) {
-      _p1CampData = data.campTable;
-      renderCampTable(data.campTable, 'campaign');
-    } else {
-      // fallback: tenta endpoint separado
-      await loadCampTable('campaign');
-    }
+    await loadCampTable('campaign');
     reveal('sec-camp');
 
     console.log('[DEBUG] ✅ loadP1() completado com sucesso!');
@@ -341,14 +335,13 @@ function renderKPIs(kpis) {
       const isPos = inv ? k.delta <= 0 : k.delta >= 0;
       const cls = isPos ? 'pos' : 'neg';
       const arrow = k.delta >= 0 ? '▲' : '▼';
-      deltaHtml = `<div class="kpi-delta ${cls}">${arrow} ${Math.abs(k.delta)}% vs mês ant.</div>`;
+      deltaHtml = `<div class="kpi-delta ${cls}">${arrow} ${Math.abs(k.delta)}% MoM</div>`;
     } else {
-      deltaHtml = `<div class="kpi-delta neutral">— sem dados ant.</div>`;
+      deltaHtml = `<div class="kpi-delta neutral">— sem dados MoM</div>`;
     }
     return `<div class="kpi-card">
       <div class="kpi-label">${k.label}</div>
       <div class="kpi-value">${k.format === 'currency' ? fmt(Math.round(k.value), 'currency') : fmt(k.value, 'number')}</div>
-      <div style="font-size:0.7rem;color:#4a5568;margin-top:2px">mês atual</div>
       ${deltaHtml}
     </div>`;
   }).join('');
@@ -360,18 +353,43 @@ function renderVolumeChart(g1) {
   wrap.innerHTML = '<div class="chart-card"><canvas id="chart-volume"></canvas></div>';
   const ctx = document.getElementById('chart-volume').getContext('2d');
 
+  // Monta anotações para cada dia com importação Driva
+  const annotations = {};
+  (g1.drivaFlags || []).forEach((f, i) => {
+    annotations['driva_line_' + i] = {
+      type: 'line',
+      xMin: f.date,
+      xMax: f.date,
+      borderColor: 'rgba(237,137,54,0.8)',
+      borderWidth: 2,
+      borderDash: [4, 3],
+      label: {
+        display: true,
+        content: 'Driva (' + f.count + ')',
+        position: 'start',
+        backgroundColor: 'rgba(237,137,54,0.85)',
+        color: '#fff',
+        font: { size: 10, weight: 'bold' },
+        padding: { x: 6, y: 3 },
+        yAdjust: -6
+      }
+    };
+  });
+
   new Chart(ctx, {
     type: 'bar',
     data: {
       labels: g1.labels,
       datasets: [
-        { label: 'Leads Google Ads', data: g1.leads, backgroundColor: 'rgba(99,179,237,0.6)', borderColor: '#63b3ed', borderWidth: 1 },
-        { label: 'Qualificados Google Ads', data: g1.mql, backgroundColor: 'rgba(72,187,120,0.6)', borderColor: '#48bb78', borderWidth: 1 },
+        { label: 'Leads', data: g1.leads, backgroundColor: 'rgba(99,179,237,0.6)', borderColor: '#63b3ed', borderWidth: 1 },
+        { label: 'MQL', data: g1.mql, backgroundColor: 'rgba(72,187,120,0.6)', borderColor: '#48bb78', borderWidth: 1 },
         { label: 'MM7D Leads', data: g1.mm7Leads, type: 'line', borderColor: '#f6ad55', borderWidth: 2.5, pointRadius: 0, tension: 0.3, yAxisID: 'y' },
-        { label: 'MM7D Qualificados', data: g1.mm7MQL, type: 'line', borderColor: '#48bb78', borderWidth: 2.5, pointRadius: 0, tension: 0.3, yAxisID: 'y', borderDash: [5, 5] }
+        { label: 'MM7D MQL', data: g1.mm7MQL, type: 'line', borderColor: '#48bb78', borderWidth: 2.5, pointRadius: 0, tension: 0.3, yAxisID: 'y', borderDash: [5, 5] }
       ]
     },
-    options: mergeDeep(CHART_DEFAULTS, {})
+    options: mergeDeep(CHART_DEFAULTS, {
+      plugins: { annotation: { annotations } }
+    })
   });
 }
 
@@ -432,7 +450,7 @@ function renderCostMQLMonthly(data) {
       datasets: [
         {
           type: 'bar',
-          label: 'Leads Google Ads',
+          label: 'MQL (Meta Ads)',
           data: data.map(d => d.mql),
           backgroundColor: 'rgba(72,187,120,0.6)',
           borderColor: '#48bb78',
@@ -478,65 +496,20 @@ function renderCostMQLMonthly(data) {
 
 let _campCurrentGroup = 'campaign';
 
-// Dados de campanha-level vêm do P1 (cache 24h); adgroup/keyword vêm do endpoint separado
-let _p1CampData = null; // cache local da view "campaign" que vem do P1
-
-function renderCampTable(rows, groupBy) {
-  const wrap = document.getElementById('camp-table-wrap');
-  if (!wrap) return;
-
-  const LABELS = { campaign: 'Campanha', adgroup: 'Ad Group', keyword: 'Keyword' };
-  const hasCtx = groupBy !== 'campaign';
-
-  const thead = `<tr>
-    <th>${LABELS[groupBy]}</th>
-    ${hasCtx ? '<th style="color:#718096;font-size:0.75rem">Campanha</th>' : ''}
-    <th>Investimento (R$)</th><th>Conversões</th><th>Custo/Conv (R$)</th><th>Clicks</th><th>CTR (%)</th>
-  </tr>`;
-
-  const tbody = rows.length ? rows.map(r => `<tr>
-    <td style="max-width:280px;word-break:break-word">${r.name || '—'}</td>
-    ${hasCtx ? `<td style="color:#718096;font-size:0.78rem;max-width:200px;word-break:break-word">${r.campaign || '—'}</td>` : ''}
-    <td>${r.spend != null ? fmt(r.spend, 'currency') : '—'}</td>
-    <td>${r.conversions != null ? fmt(r.conversions, 'number') : '—'}</td>
-    <td>${r.costPerConversion != null ? fmt(r.costPerConversion, 'currency') : '—'}</td>
-    <td>${r.clicks != null ? fmt(r.clicks, 'number') : '—'}</td>
-    <td>${r.ctr != null ? r.ctr.toFixed(2) + '%' : '—'}</td>
-  </tr>`).join('') : `<tr><td colspan="7" style="padding:20px;color:#718096">Sem dados disponíveis.</td></tr>`;
-
-  wrap.className = 'table-card';
-  wrap.innerHTML = `
-    <div class="table-header">
-      <span style="font-size:0.85rem;font-weight:600">Google Ads — últimos 30 dias</span>
-      <div style="display:flex;gap:6px;margin-left:16px">
-        <button onclick="loadCampTable('campaign')" class="toggle-btn ${'campaign'===groupBy?'active':''}">Campanha</button>
-        <button onclick="loadCampTable('adgroup')"  class="toggle-btn ${'adgroup' ===groupBy?'active':''}">Ad Group</button>
-        <button onclick="loadCampTable('keyword')"  class="toggle-btn ${'keyword' ===groupBy?'active':''}">Keyword</button>
-      </div>
-    </div>
-    <div style="overflow-x:auto"><table><thead>${thead}</thead><tbody>${tbody}</tbody></table></div>`;
-}
-
 async function loadCampTable(groupBy) {
   _campCurrentGroup = groupBy;
   const wrap = document.getElementById('camp-table-wrap');
   if (!wrap) return;
 
-  // Campanha-level: usa dados já carregados do P1 (sem fetch extra)
-  if (groupBy === 'campaign' && _p1CampData) {
-    renderCampTable(_p1CampData, 'campaign');
-    return;
-  }
-
-  // Ad Group / Keyword: busca do endpoint separado
+  // Mostra loading enquanto busca
   wrap.className = 'table-card';
   wrap.innerHTML = `
     <div class="table-header">
-      <span style="font-size:0.85rem;font-weight:600">Google Ads — últimos 30 dias</span>
+      <span style="font-size:0.85rem;font-weight:600">Google Ads — 2026</span>
       <div style="display:flex;gap:6px;margin-left:16px">
-        <button onclick="loadCampTable('campaign')" class="toggle-btn ${'campaign'===groupBy?'active':''}">Campanha</button>
-        <button onclick="loadCampTable('adgroup')"  class="toggle-btn ${'adgroup' ===groupBy?'active':''}">Ad Group</button>
-        <button onclick="loadCampTable('keyword')"  class="toggle-btn ${'keyword' ===groupBy?'active':''}">Keyword</button>
+        <button onclick="loadCampTable('campaign')" class="toggle-btn ${groupBy==='campaign'?'active':''}" id="btn-camp-campaign">Campanha</button>
+        <button onclick="loadCampTable('adgroup')"  class="toggle-btn ${groupBy==='adgroup' ?'active':''}" id="btn-camp-adgroup">Ad Group</button>
+        <button onclick="loadCampTable('keyword')"  class="toggle-btn ${groupBy==='keyword' ?'active':''}" id="btn-camp-keyword">Keyword</button>
       </div>
     </div>
     <div style="padding:20px;color:#718096;font-size:0.85rem">Carregando...</div>`;
@@ -544,20 +517,40 @@ async function loadCampTable(groupBy) {
   try {
     const res  = await fetch('/api/p1/campaigns-enriched?groupBy=' + groupBy);
     const data = await res.json();
-    if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
-    renderCampTable(data.campaigns || [], groupBy);
-  } catch (e) {
-    console.error('[loadCampTable] erro:', e);
+    const rows = data.campaigns || [];
+
+    const LABELS = { campaign: 'Campanha', adgroup: 'Ad Group', keyword: 'Keyword' };
+    const hasCtx = groupBy !== 'campaign'; // Ad Group e Keyword mostram coluna "Campanha" de contexto
+
+    const thead = `<tr>
+      <th>${LABELS[groupBy]}</th>
+      ${hasCtx ? '<th style="color:#718096">Campanha</th>' : ''}
+      <th>Spend (R$)</th><th>Conversões</th><th>Custo/Conv (R$)</th><th>Clicks</th><th>CTR (%)</th>
+    </tr>`;
+
+    const tbody = rows.length ? rows.map(r => `<tr>
+      <td>${r.name || '—'}</td>
+      ${hasCtx ? `<td style="color:#718096;font-size:0.8rem">${r.campaign || '—'}</td>` : ''}
+      <td>${fmt(r.spend, 'currency')}</td>
+      <td>${fmt(r.conversions, 'number')}</td>
+      <td>${r.costPerConversion ? fmt(r.costPerConversion, 'currency') : '—'}</td>
+      <td>${fmt(r.clicks, 'number')}</td>
+      <td>${r.ctr ? r.ctr.toFixed(2) + '%' : '—'}</td>
+    </tr>`).join('') : `<tr><td colspan="7" style="padding:20px;color:#718096">Sem dados para este nível.</td></tr>`;
+
     wrap.innerHTML = `
       <div class="table-header">
-        <span style="font-size:0.85rem;font-weight:600">Google Ads — últimos 30 dias</span>
+        <span style="font-size:0.85rem;font-weight:600">Google Ads — 2026</span>
         <div style="display:flex;gap:6px;margin-left:16px">
           <button onclick="loadCampTable('campaign')" class="toggle-btn ${'campaign'===groupBy?'active':''}">Campanha</button>
           <button onclick="loadCampTable('adgroup')"  class="toggle-btn ${'adgroup' ===groupBy?'active':''}">Ad Group</button>
           <button onclick="loadCampTable('keyword')"  class="toggle-btn ${'keyword' ===groupBy?'active':''}">Keyword</button>
         </div>
       </div>
-      <div style="padding:20px;color:#fc8181;font-size:0.85rem">⚠️ Metabase indisponível. ${e.message}</div>`;
+      <div style="overflow-x:auto"><table><thead>${thead}</thead><tbody>${tbody}</tbody></table></div>`;
+  } catch (e) {
+    console.error('[loadCampTable] erro:', e);
+    wrap.innerHTML = `<div style="padding:20px;color:#fc8181">Erro ao carregar dados. ${e.message}</div>`;
   }
 }
 
@@ -627,14 +620,6 @@ function renderEfficiencyChart(g12) {
 
 function renderCohortTable(rows) {
   const tbody = document.getElementById('cohort-body');
-  const expected = (rows.length && rows[0].expected) ? rows[0].expected : {};
-
-  function cellWithExp(val, expVal, format) {
-    const main = (val !== null && val !== undefined) ? fmt(val, format) : '—';
-    const exp = (expVal !== null && expVal !== undefined) ? `<div style="font-size:0.7rem;color:#718096">(exp: ${fmt(expVal, format)})</div>` : '';
-    return main + exp;
-  }
-
   tbody.innerHTML = rows.map(r => {
     let cacClass = '';
     if (r.cac !== null) {
@@ -647,14 +632,14 @@ function renderCohortTable(rows) {
       <td>${r.mql || '—'}</td>
       <td>${r.reuniao || '—'}</td>
       <td>${r.ganho || '—'}</td>
-      <td>${cellWithExp(r.mrr || null, expected.mrr, 'currency')}</td>
+      <td>${r.mrr ? fmt(r.mrr, 'currency') : '—'}</td>
       <td>${r.spend ? fmt(r.spend, 'currency') : '—'}</td>
-      <td>${cellWithExp(r.roas, expected.roas, 'dec')}</td>
-      <td class="${cacClass}">${cellWithExp(r.cac, expected.cac, 'currency')}</td>
-      <td>${cellWithExp(r.ltv || null, expected.ltv, 'currency')}</td>
-      <td>${cellWithExp(r.ltvCac, expected.ltvCac, 'dec')}</td>
-      <td>${cellWithExp(r.ticketMedio || null, expected.ticketMedio, 'currency')}</td>
-      <td>${r.payback !== null ? r.payback + 'm' + (expected.payback !== null && expected.payback !== undefined ? `<div style="font-size:0.7rem;color:#718096">(exp: ${expected.payback}m)</div>` : '') : '—'}</td>
+      <td>${r.roas !== null ? r.roas : '—'}</td>
+      <td class="${cacClass}">${r.cac !== null ? fmt(r.cac, 'currency') : '—'}</td>
+      <td>${r.ltv ? fmt(r.ltv, 'currency') : '—'}</td>
+      <td>${r.ltvCac !== null ? r.ltvCac : '—'}</td>
+      <td>${r.ticketMedio ? fmt(r.ticketMedio, 'currency') : '—'}</td>
+      <td>${r.payback !== null ? r.payback + 'm' : '—'}</td>
     </tr>`;
   }).join('');
 }
