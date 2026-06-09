@@ -304,10 +304,11 @@ async function buildP1() {
     }).catch(e => { console.error('[buildP1] frota erro:', e.message); return []; }),
     // 4. Spend Metabase (por dia, para gráficos de custo)
     loadGoogleCampaignsFromMetabase(d90ago, today).catch(e => { console.error('[buildP1] spend erro:', e.message); return []; }),
-    // 5. Reuniões (etapa "Reunião Agendada") — cobre MTD + mês anterior; bucketizado por dia
+    // 5. Reuniões (etapa "Reunião Agendada") Google Ads — mesma origem de Leads/MQL; cobre MTD + mês anterior
     hsSearchAll('deals', {
       filterGroups: [{ filters: [
         { propertyName: 'pipeline',   operator: 'EQ',  value: PIPELINE_PRE_VENDAS },
+        { propertyName: 'sub_origem', operator: 'EQ',  value: SUB_ORIGEM_GOOGLE },
         { propertyName: 'dealstage',  operator: 'EQ',  value: STAGE_REUNIAO },
         { propertyName: 'createdate', operator: 'GTE', value: String(monthStartPrev.getTime()) },
         { propertyName: 'createdate', operator: 'LT',  value: String(todayEnd.getTime()) }
