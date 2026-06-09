@@ -278,11 +278,10 @@ async function buildP1() {
       ]}],
       properties: ['createdate', 'dealname', 'sub_origem', 'dealstage']
     }),
-    // 2. MQL (KPI) = DEALS sub_origem Meta Ads — span amplo (cobre 7D atual + anterior e g3 rolling)
+    // 2. MQL (KPI) = TODOS os deals do pipeline Pré-Vendas (qualquer origem) — span amplo (7D atual + anterior)
     hsSearchAll('deals', {
       filterGroups: [{ filters: [
         { propertyName: 'pipeline',   operator: 'EQ',  value: PIPELINE_PRE_VENDAS },
-        { propertyName: 'sub_origem', operator: 'EQ',  value: SUB_ORIGEM_META },
         { propertyName: 'createdate', operator: 'GTE', value: String(monthStartPrev.getTime()) },
         { propertyName: 'createdate', operator: 'LTE', value: String(today.getTime()) }
       ]}],
@@ -372,7 +371,7 @@ async function buildP1() {
   });
 
   // MQL (7D) = Deals with sub_origem = "Midia-Paga-Google-Ads" created in 7D
-  console.log(`[P1] MQL Deals fetched: ${mqlDealsRes.length} | Filter: pipeline=${PIPELINE_PRE_VENDAS} + sub_origem="${SUB_ORIGEM_GOOGLE}" | Period: ${toYMD(monthStartPrev)} to ${toYMD(today)}`);
+  console.log(`[P1] MQL Deals fetched: ${mqlDealsRes.length} | Filter: pipeline=${PIPELINE_PRE_VENDAS} (qualquer origem) | Period: ${toYMD(monthStartPrev)} to ${toYMD(today)}`);
   mqlDealsRes.forEach(d => {
     const dt = toYMD(new Date(d.properties.createdate));
     if (dt && dt <= yesterday) {
@@ -423,8 +422,8 @@ async function buildP1() {
   // Leads (7D) = CONTATOS sub_origem google ads criados nos últimos 7 dias
   const leads7d   = sumRange(dailyLeadsContacts, win7Start,     addDays(today, 1), 'Leads(7D contatos)');
   const leadsPrev = sumRange(dailyLeadsContacts, win7PrevStart, win7Start);
-  // MQL (7D) = DEALS sub_origem Meta Ads criados nos últimos 7 dias
-  const mql7d     = sumRange(dailyMQL, win7Start,     addDays(today, 1), 'MQL(7D Meta)');
+  // MQL (7D) = TODOS os deals do pipeline Pré-Vendas criados nos últimos 7 dias (qualquer origem)
+  const mql7d     = sumRange(dailyMQL, win7Start,     addDays(today, 1), 'MQL(7D Pré-Vendas)');
   const mqlPrev   = sumRange(dailyMQL, win7PrevStart, win7Start);
   // Spend (7D) — Google Ads
   const spend7d   = sumRange(dailySpend, win7Start,     addDays(today, 1));
