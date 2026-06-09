@@ -177,14 +177,15 @@ async function metabaseQuery(sql) {
 }
 
 async function loadGoogleCampaignsFromMetabase(fromDate, toDate) {
+  // Usa DATE '...' em vez de TIMESTAMP '...' para evitar erro de tipo no Athena
   const sql = `
     SELECT
       CAST(date AS DATE) as date,
       cost_brl,
       campaign_name
     FROM data_analytics.google_campaigns
-    WHERE date >= TIMESTAMP '${toYMD(fromDate)} 00:00:00'
-      AND date <= TIMESTAMP '${toYMD(toDate)} 23:59:59'
+    WHERE CAST(date AS DATE) >= DATE '${toYMD(fromDate)}'
+      AND CAST(date AS DATE) <= DATE '${toYMD(toDate)}'
     ORDER BY date DESC
   `;
   try {
@@ -263,11 +264,11 @@ async function buildP1() {
       ]}],
       properties: ['createdate', 'dealname', 'sub_origem', 'dealstage']
     }),
-    // 2. MQL desde início do mês anterior (Meta Ads — KPI MQL)
+    // 2. MQL desde início do mês anterior (Google Ads — mesmo canal do spend para KPI coerente)
     hsSearchAll('deals', {
       filterGroups: [{ filters: [
         { propertyName: 'pipeline',   operator: 'EQ',  value: PIPELINE_PRE_VENDAS },
-        { propertyName: 'sub_origem', operator: 'EQ',  value: SUB_ORIGEM_META },
+        { propertyName: 'sub_origem', operator: 'EQ',  value: SUB_ORIGEM_GOOGLE },
         { propertyName: 'createdate', operator: 'GTE', value: String(monthStartPrev.getTime()) },
         { propertyName: 'createdate', operator: 'LTE', value: String(today.getTime()) }
       ]}],
@@ -348,7 +349,7 @@ async function buildP1() {
   });
 
   // MQL (7D) = Deals with sub_origem = "Midia-Paga-Google-Ads" created in 7D
-  console.log(`[P1] MQL Deals fetched: ${mqlDealsRes.length} | Filter: pipeline=${PIPELINE_PRE_VENDAS} + sub_origem="${SUB_ORIGEM_META}" | Period: ${toYMD(d7ago)} to ${toYMD(today)}`);
+  console.log(`[P1] MQL Deals fetched: ${mqlDealsRes.length} | Filter: pipeline=${PIPELINE_PRE_VENDAS} + sub_origem="${SUB_ORIGEM_GOOGLE}" | Period: ${toYMD(monthStartPrev)} to ${toYMD(today)}`);
   mqlDealsRes.forEach(d => {
     const dt = toYMD(new Date(d.properties.createdate));
     if (dt && dt <= yesterday) {
@@ -735,9 +736,15 @@ async function buildCostMQLMonthly() {
     return memCache.g3Monthly;
   }
 
-  const MONTHS = ['2026-01', '2026-02', '2026-03', '2026-04', '2026-05', '2026-06'];
-  const from = new Date('2026-01-01T00:00:00.000Z');
-  const to   = new Date('2026-06-30T23:59:59.999Z');
+  // Gera os meses do ano corrente dinamicamente (janeiro até mês atual)
+  const currentYear = new Date().getFullYear();
+  const currentMonth = new Date().getMonth() + 1; // 1-12
+  const MONTHS = [];
+  for (let m = 1; m <= currentMonth; m++) {
+    MONTHS.push(`${currentYear}-${String(m).padStart(2, '0')}`);
+  }
+  const from = new Date(`${currentYear}-01-01T00:00:00.000Z`);
+  const to   = new Date(); // até hoje
 
   try {
     // Leads reais do HubSpot: pipeline Pré-Vendas + sub_origem = Google Ads
@@ -910,14 +917,28 @@ app.get('/api/status', (req, res) => {
 
 app.get('/api/p1', async (req, res) => {
   try {
-    // Se cache em memória existe, retorna imediatamente (< 1ms)
-    if (MEM_CACHE['p1'] && MEM_CACHE['p1'].data) {
+    // Se cache em memória existe e dentro do TTL, retorna imediatamente (< 1ms)
+    if (MEM_CACHE['p1'] && MEM_CACHE['p1'].data && Date.now() - MEM_CACHE['p1'].ts < CACHE_TTL) {
       return res.json(MEM_CACHE['p1'].data);
     }
     // Verifica cache em disco
     const disk = readDiskCache('p1');
     if (disk) {
-      MEM_CACHE['p1'] = { ts: Date.now(), data: disk };
+      // Se cache está fresco, carrega na memória e dispara revalidação em background
+      const p1File = diskCachePath('p1');
+      let diskTs = 0;
+      try { diskTs = JSON.parse(fs.readFileSync(p1File, 'utf8')).ts; } catch (_) {}
+      const diskFresh = diskTs && Date.now() - diskTs < CACHE_TTL;
+      if (diskFresh) {
+        MEM_CACHE['p1'] = { ts: diskTs, data: disk };
+        return res.json(disk);
+      }
+      // Cache em disco expirado: serve stale e revalida em background
+      console.log('[p1] cache expirado, servindo stale e revalidando em background...');
+      MEM_CACHE['p1'] = { ts: Date.now(), data: disk }; // atualiza ts para evitar múltiplos rebuilds
+      buildP1()
+        .then(d => { MEM_CACHE['p1'] = { ts: Date.now(), data: d }; writeDiskCache('p1', d); console.log('[p1] revalidação OK'); })
+        .catch(e => console.error('[p1] revalidação erro:', e.message));
       return res.json(disk);
     }
     // Cache ainda sendo construído em background — avisa frontend para tentar novamente
@@ -940,12 +961,24 @@ app.get('/api/p1/kpis', async (req, res) => {
 
 app.get('/api/p2', async (req, res) => {
   try {
-    if (MEM_CACHE['p2'] && MEM_CACHE['p2'].data) {
+    if (MEM_CACHE['p2'] && MEM_CACHE['p2'].data && Date.now() - MEM_CACHE['p2'].ts < CACHE_TTL) {
       return res.json(MEM_CACHE['p2'].data);
     }
     const disk = readDiskCache('p2');
     if (disk) {
+      const p2File = diskCachePath('p2');
+      let diskTs = 0;
+      try { diskTs = JSON.parse(fs.readFileSync(p2File, 'utf8')).ts; } catch (_) {}
+      const diskFresh = diskTs && Date.now() - diskTs < CACHE_TTL;
+      if (diskFresh) {
+        MEM_CACHE['p2'] = { ts: diskTs, data: disk };
+        return res.json(disk);
+      }
+      console.log('[p2] cache expirado, servindo stale e revalidando em background...');
       MEM_CACHE['p2'] = { ts: Date.now(), data: disk };
+      buildP2()
+        .then(d => { MEM_CACHE['p2'] = { ts: Date.now(), data: d }; writeDiskCache('p2', d); console.log('[p2] revalidação OK'); })
+        .catch(e => console.error('[p2] revalidação erro:', e.message));
       return res.json(disk);
     }
     return res.status(202).json({ loading: true, message: 'Dados sendo carregados do HubSpot, tente novamente em 30 segundos.' });
@@ -1012,6 +1045,10 @@ app.post('/api/force-refresh', async (req, res) => {
   console.log('[force-refresh] iniciando rebuild do cache...');
   delete MEM_CACHE['p1'];
   delete MEM_CACHE['p2'];
+  // Limpa também o memCache dos endpoints separados (cost-mql-monthly e campaigns-enriched)
+  memCache.g3Monthly = null;
+  memCache.g3ts = 0;
+  Object.keys(memCache).filter(k => k.startsWith('campaigns_') || k.startsWith('campts_')).forEach(k => { memCache[k] = null; });
   try {
     const [p1, p2] = await Promise.all([buildP1(), buildP2()]);
     MEM_CACHE['p1'] = { ts: Date.now(), data: p1 };

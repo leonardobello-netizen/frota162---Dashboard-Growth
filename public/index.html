@@ -646,11 +646,11 @@ function renderCohortTable(rows) {
     }
     return `<tr>
       <td>${r.mes}</td>
-      <td>${r.mql || '—'}</td>
-      <td>${r.reuniao || '—'}</td>
-      <td>${r.ganho || '—'}</td>
-      <td>${cellWithExp(r.mrr || null, expected.mrr, 'currency')}</td>
-      <td>${r.spend ? fmt(r.spend, 'currency') : '—'}</td>
+      <td>${r.mql ?? '—'}</td>
+      <td>${r.reuniao ?? '—'}</td>
+      <td>${r.ganho ?? '—'}</td>
+      <td>${cellWithExp(r.mrr != null ? r.mrr : null, expected.mrr, 'currency')}</td>
+      <td>${r.spend != null ? fmt(r.spend, 'currency') : '—'}</td>
       <td>${cellWithExp(r.roas, expected.roas, 'dec')}</td>
       <td class="${cacClass}">${cellWithExp(r.cac, expected.cac, 'currency')}</td>
       <td>${cellWithExp(r.ltv || null, expected.ltv, 'currency')}</td>
