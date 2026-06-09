@@ -69,6 +69,7 @@ const SUB_ORIGEM_GOOGLE_CONTACT = 'midia-paga-google-ads'; // valor de sub_orige
 const PIPELINE_PRE_VENDAS = '691581102';
 const PIPELINE_SALES = 'default';
 const STAGE_REUNIAO = '1012021273';
+const STAGE_DESQUALIFICADO = '1012021274';
 
 // ── Helpers ───────────────────────────────────────────────────
 function diskCachePath(key) {
@@ -291,11 +292,12 @@ async function buildP1() {
       ]}],
       properties: ['createdate', 'sub_origem']
     }),
-    // 3. Frota 90d — DEALS Google Ads no pipeline Pré-Vendas (remove Novos Parceiros/Onboarding e dupla contagem com Vendas)
+    // 3. Frota 90d — DEALS Google Ads no Pré-Vendas, EXCLUINDO desqualificados (leads descartados poluíam o "Não informado")
     hsSearchAll('deals', {
       filterGroups: [{ filters: [
         { propertyName: 'pipeline',   operator: 'EQ',  value: PIPELINE_PRE_VENDAS },
         { propertyName: 'sub_origem',  operator: 'EQ',  value: SUB_ORIGEM_GOOGLE },
+        { propertyName: 'dealstage',  operator: 'NEQ', value: STAGE_DESQUALIFICADO },
         { propertyName: 'createdate', operator: 'GTE', value: String(d90ago.getTime()) }
       ]}],
       properties: ['createdate', 'dealname', 'qual_a_quantidade_de_veiculos_na_sua_frota_']
