@@ -256,6 +256,9 @@ async function buildP1() {
   const lastMonthMaxDay = new Date(Date.UTC(ty, tm - 1, 0)).getUTCDate();
   const lastMonthDay = Math.min(currentDay, lastMonthMaxDay);
   const datePrev = brMidnight(ty, tm - 2, lastMonthDay);
+  // Limites superiores (exclusivos) — incluem D-1 / o mesmo dia do mês anterior por completo
+  const todayEnd    = addDays(today, 1);    // início de hoje (D-1 inteiro incluído)
+  const datePrevEnd = addDays(datePrev, 1); // mesmo dia do mês anterior, inteiro incluído
 
   // ── Todas as queries em PARALELO — reduz ~3min → ~40s ────────
   console.log('[buildP1] Iniciando 7 queries em paralelo...');
@@ -265,7 +268,6 @@ async function buildP1() {
     contactsRaw,
     googleCampaigns,
     reunioesRaw,
-    reunioesPrevRes,
     campaignsAgg,
     leadsContactsRes
   ] = await Promise.all([
@@ -278,13 +280,13 @@ async function buildP1() {
       ]}],
       properties: ['createdate', 'dealname', 'sub_origem', 'dealstage']
     }),
-    // 2. MQL (KPI) = deals do pipeline Pré-Vendas com a MESMA origem do Lead (Google Ads) — span amplo (7D atual + anterior)
+    // 2. MQL (KPI) = deals do pipeline Pré-Vendas com a MESMA origem do Lead (Google Ads) — cobre MTD + mês anterior
     hsSearchAll('deals', {
       filterGroups: [{ filters: [
         { propertyName: 'pipeline',   operator: 'EQ',  value: PIPELINE_PRE_VENDAS },
         { propertyName: 'sub_origem', operator: 'EQ',  value: SUB_ORIGEM_GOOGLE },
         { propertyName: 'createdate', operator: 'GTE', value: String(monthStartPrev.getTime()) },
-        { propertyName: 'createdate', operator: 'LTE', value: String(today.getTime()) }
+        { propertyName: 'createdate', operator: 'LT',  value: String(todayEnd.getTime()) }
       ]}],
       properties: ['createdate', 'sub_origem']
     }),
@@ -298,26 +300,15 @@ async function buildP1() {
     }).catch(e => { console.error('[buildP1] frota erro:', e.message); return []; }),
     // 4. Spend Metabase (por dia, para gráficos de custo)
     loadGoogleCampaignsFromMetabase(d90ago, today).catch(e => { console.error('[buildP1] spend erro:', e.message); return []; }),
-    // 5. Reuniões 7D
+    // 5. Reuniões (etapa "Reunião Agendada") — cobre MTD + mês anterior; bucketizado por dia
     hsSearchAll('deals', {
       filterGroups: [{ filters: [
         { propertyName: 'pipeline',   operator: 'EQ',  value: PIPELINE_PRE_VENDAS },
         { propertyName: 'dealstage',  operator: 'EQ',  value: STAGE_REUNIAO },
-        { propertyName: 'createdate', operator: 'GTE', value: String(d7ago.getTime()) },
-        { propertyName: 'createdate', operator: 'LTE', value: String(today.getTime()) }
+        { propertyName: 'createdate', operator: 'GTE', value: String(monthStartPrev.getTime()) },
+        { propertyName: 'createdate', operator: 'LT',  value: String(todayEnd.getTime()) }
       ]}],
       properties: ['createdate']
-    }),
-    // 6. Reuniões mês anterior
-    hsSearch('deals', {
-      filterGroups: [{ filters: [
-        { propertyName: 'pipeline',   operator: 'EQ',  value: PIPELINE_PRE_VENDAS },
-        { propertyName: 'dealstage',  operator: 'EQ',  value: STAGE_REUNIAO },
-        { propertyName: 'createdate', operator: 'GTE', value: String(monthStartPrev.getTime()) },
-        { propertyName: 'createdate', operator: 'LTE', value: String(addDays(datePrev, 1).getTime()) }
-      ]}],
-      properties: ['createdate'],
-      limit: 100
     }),
     // 7. Campanhas agregadas (30d) — com conversões e clicks do Metabase
     metabaseQuery(`
@@ -330,12 +321,12 @@ async function buildP1() {
       GROUP BY campaign_name
       ORDER BY spend DESC
     `).catch(e => { console.error('[buildP1] campaignsAgg erro:', e.message); return null; }),
-    // 8. CONTATOS Google Ads (KPI Leads) — últimos 14 dias (cobre 7D atual + 7D anterior)
+    // 8. CONTATOS Google Ads (KPI Leads) — cobre MTD + mês anterior (do início do mês anterior até D-1)
     hsSearchAll('contacts', {
       filterGroups: [{ filters: [
         { propertyName: 'sub_origem', operator: 'EQ',  value: SUB_ORIGEM_GOOGLE_CONTACT },
-        { propertyName: 'createdate', operator: 'GTE', value: String(addDays(today, -13).getTime()) },
-        { propertyName: 'createdate', operator: 'LTE', value: String(today.getTime()) }
+        { propertyName: 'createdate', operator: 'GTE', value: String(monthStartPrev.getTime()) },
+        { propertyName: 'createdate', operator: 'LT',  value: String(todayEnd.getTime()) }
       ]}],
       properties: ['createdate', 'sub_origem']
     }).catch(e => { console.error('[buildP1] leads contatos erro:', e.message); return []; })
@@ -390,6 +381,16 @@ async function buildP1() {
   });
   console.log(`[P1] Contatos Google Ads (KPI Leads): ${(leadsContactsRes||[]).length} | dist:`, JSON.stringify(dailyLeadsContacts));
 
+  // REUNIÕES (etapa "Reunião Agendada") → bucket diário para MTD vs mês anterior
+  const dailyReuniao = {};
+  (reunioesRaw || []).forEach(d => {
+    const dt = toYMD(new Date(d.properties.createdate));
+    if (dt && dt <= yesterday) {
+      dailyReuniao[dt] = (dailyReuniao[dt] || 0) + 1;
+    }
+  });
+  console.log(`[P1] Reuniões fetched: ${(reunioesRaw||[]).length} | dist:`, JSON.stringify(dailyReuniao));
+
   console.log(`[P1] LEADS distribution:`, JSON.stringify(dailyLeads));
   console.log(`[P1] MQL distribution:`, JSON.stringify(dailyMQL));
 
@@ -416,45 +417,38 @@ async function buildP1() {
     return s;
   }
 
-  // ── Janelas 7D para os KPIs do topo ───────────────────────────
-  const win7Start     = addDays(today, -6);  // D-7 (início 7D atual; soma até D-1 inclusive)
-  const win7PrevStart = addDays(today, -13); // D-14 (início 7D anterior; vai até D-8)
-
-  // Leads (7D) = CONTATOS sub_origem google ads criados nos últimos 7 dias
-  const leads7d   = sumRange(dailyLeadsContacts, win7Start,     addDays(today, 1), 'Leads(7D contatos)');
-  const leadsPrev = sumRange(dailyLeadsContacts, win7PrevStart, win7Start);
-  // MQL (7D) = deals do pipeline Pré-Vendas com sub_origem Google Ads (mesma origem do Lead), últimos 7 dias
-  const mql7d     = sumRange(dailyMQL, win7Start,     addDays(today, 1), 'MQL(7D Pré-Vendas Google)');
-  const mqlPrev   = sumRange(dailyMQL, win7PrevStart, win7Start);
-  // Spend (7D) — Google Ads
-  const spend7d   = sumRange(dailySpend, win7Start,     addDays(today, 1));
-  const spendPrev = sumRange(dailySpend, win7PrevStart, win7Start);
+  // ── KPIs do topo: MTD (mês atual até D-1) vs mesmo período do mês anterior ──
+  // Atual:    do dia 1 do mês corrente até D-1 (ontem)
+  // Anterior: do dia 1 do mês passado até o mesmo dia do mês passado
+  const leadsMTD  = sumRange(dailyLeadsContacts, monthStart,     todayEnd,    'Leads(MTD)');
+  const leadsPrev = sumRange(dailyLeadsContacts, monthStartPrev, datePrevEnd, 'Leads(mês ant.)');
+  const mqlMTD    = sumRange(dailyMQL, monthStart,     todayEnd,    'MQL(MTD)');
+  const mqlPrev   = sumRange(dailyMQL, monthStartPrev, datePrevEnd, 'MQL(mês ant.)');
+  const reuniaoMTD  = sumRange(dailyReuniao, monthStart,     todayEnd,    'Reunião(MTD)');
+  const reuniaoPrev = sumRange(dailyReuniao, monthStartPrev, datePrevEnd, 'Reunião(mês ant.)');
+  const spendMTD  = sumRange(dailySpend, monthStart,     todayEnd);
+  const spendPrev = sumRange(dailySpend, monthStartPrev, datePrevEnd);
 
   function pct(cur, prev) {
     if (!prev) return null;
     return Math.round(((cur - prev) / prev) * 100);
   }
 
-  const costPerLead7d = leads7d ? spend7d / leads7d : 0;
-  const costPerMQL7d = mql7d ? spend7d / mql7d : 0;
+  const costPerLead     = leadsMTD  ? spendMTD  / leadsMTD  : 0;
+  const costPerMQL      = mqlMTD    ? spendMTD  / mqlMTD    : 0;
   const costPerLeadPrev = leadsPrev ? spendPrev / leadsPrev : 0;
-  const costPerMQLPrev = mqlPrev ? spendPrev / mqlPrev : 0;
+  const costPerMQLPrev  = mqlPrev   ? spendPrev / mqlPrev   : 0;
 
-  const reuniao7d = reunioesRaw.length;
-  const reunioesPrevRaw = (reunioesPrevRes && reunioesPrevRes.results) ? reunioesPrevRes.results : (Array.isArray(reunioesPrevRes) ? reunioesPrevRes : []);
-  const reuniaoPrev = reunioesPrevRaw.length;
-  console.log(`[P1] Reuniões — 7D: ${reuniao7d} | anterior: ${reuniaoPrev}`);
-
-  // --- KPIs (7D) ---
-  console.log(`[P1] Final KPI 7D values: leads7d=${leads7d}, mql7d=${mql7d}, leadsPrev=${leadsPrev}, mqlPrev=${mqlPrev}, spend7d=${spend7d}`);
-  const metabaseOk = spend7d > 0 || spendPrev > 0; // false = Metabase indisponível
+  // --- KPIs (MTD vs mesmo período do mês anterior) ---
+  console.log(`[P1] KPI MTD: leads=${leadsMTD}(ant ${leadsPrev}) mql=${mqlMTD}(ant ${mqlPrev}) reunião=${reuniaoMTD}(ant ${reuniaoPrev}) spend=${spendMTD}(ant ${spendPrev})`);
+  const metabaseOk = spendMTD > 0 || spendPrev > 0; // false = Metabase indisponível
   const kpis = [
-    { label: 'Leads',        value: leads7d,       delta: pct(leads7d, leadsPrev),             format: 'number' },
-    { label: 'MQL',          value: mql7d,         delta: pct(mql7d, mqlPrev),                 format: 'number' },
-    { label: 'Reunião',      value: reuniao7d,       delta: pct(reuniao7d, reuniaoPrev),           format: 'number' },
-    { label: 'Investimento', value: metabaseOk ? spend7d : null,     delta: metabaseOk ? pct(spend7d, spendPrev) : null,                format: 'currency', metabaseWarn: !metabaseOk },
-    { label: 'Custo/Lead',   value: metabaseOk ? costPerLead7d : null, delta: metabaseOk ? pct(costPerLead7d, costPerLeadPrev) : null,   format: 'currency', invertDelta: true, metabaseWarn: !metabaseOk },
-    { label: 'Custo/MQL',   value: metabaseOk ? costPerMQL7d : null,  delta: metabaseOk ? pct(costPerMQL7d, costPerMQLPrev) : null,     format: 'currency', invertDelta: true, metabaseWarn: !metabaseOk }
+    { label: 'Leads',        value: leadsMTD,   delta: pct(leadsMTD, leadsPrev),     format: 'number' },
+    { label: 'MQL',          value: mqlMTD,     delta: pct(mqlMTD, mqlPrev),         format: 'number' },
+    { label: 'Reunião',      value: reuniaoMTD, delta: pct(reuniaoMTD, reuniaoPrev), format: 'number' },
+    { label: 'Investimento', value: metabaseOk ? spendMTD : null,     delta: metabaseOk ? pct(spendMTD, spendPrev) : null,            format: 'currency', metabaseWarn: !metabaseOk },
+    { label: 'Custo/Lead',   value: metabaseOk ? costPerLead : null,  delta: metabaseOk ? pct(costPerLead, costPerLeadPrev) : null,   format: 'currency', invertDelta: true, metabaseWarn: !metabaseOk },
+    { label: 'Custo/MQL',    value: metabaseOk ? costPerMQL : null,   delta: metabaseOk ? pct(costPerMQL, costPerMQLPrev) : null,      format: 'currency', invertDelta: true, metabaseWarn: !metabaseOk }
   ];
 
   // --- Gráfico 1: Leads e MQL diários últimos 30d ---

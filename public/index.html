@@ -341,13 +341,13 @@ function renderKPIs(kpis) {
       const isPos = inv ? k.delta <= 0 : k.delta >= 0;
       const cls = isPos ? 'pos' : 'neg';
       const arrow = k.delta >= 0 ? '▲' : '▼';
-      deltaHtml = `<div class="kpi-delta ${cls}">${arrow} ${Math.abs(k.delta)}% vs 7D ant.</div>`;
+      deltaHtml = `<div class="kpi-delta ${cls}">${arrow} ${Math.abs(k.delta)}% vs mês ant.</div>`;
     } else {
       deltaHtml = `<div class="kpi-delta neutral">— sem dados ant.</div>`;
     }
     const valueHtml = k.metabaseWarn
       ? `<div class="kpi-value" style="font-size:1rem;color:#718096">sem dados</div><div style="font-size:0.65rem;color:#fc8181;margin-top:2px">⚠️ Metabase offline</div>`
-      : `<div class="kpi-value">${k.format === 'currency' ? fmt(Math.round(k.value), 'currency') : fmt(k.value, 'number')}</div><div style="font-size:0.7rem;color:#4a5568;margin-top:2px">últimos 7 dias</div>`;
+      : `<div class="kpi-value">${k.format === 'currency' ? fmt(Math.round(k.value), 'currency') : fmt(k.value, 'number')}</div><div style="font-size:0.7rem;color:#4a5568;margin-top:2px">mês atual</div>`;
     return `<div class="kpi-card">
       <div class="kpi-label">${k.label}</div>
       ${valueHtml}
