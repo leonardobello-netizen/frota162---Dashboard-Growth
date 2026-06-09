@@ -291,13 +291,13 @@ async function buildP1() {
       ]}],
       properties: ['createdate', 'sub_origem']
     }),
-    // 3. Frota 90d — Google Ads apenas
-    hsSearchAll('deals', {
+    // 3. Frota 90d — CONTATOS Google Ads (o formulário preenche o CONTATO, não o deal)
+    hsSearchAll('contacts', {
       filterGroups: [{ filters: [
-        { propertyName: 'sub_origem',  operator: 'EQ',  value: SUB_ORIGEM_GOOGLE },
+        { propertyName: 'sub_origem',  operator: 'EQ',  value: SUB_ORIGEM_GOOGLE_CONTACT },
         { propertyName: 'createdate', operator: 'GTE', value: String(d90ago.getTime()) }
       ]}],
-      properties: ['createdate', 'dealname', 'qual_a_quantidade_de_veiculos_na_sua_frota_']
+      properties: ['createdate', 'qual_a_quantidade_de_veiculos_na_sua_frota_']
     }).catch(e => { console.error('[buildP1] frota erro:', e.message); return []; }),
     // 4. Spend Metabase (por dia, para gráficos de custo)
     loadGoogleCampaignsFromMetabase(d90ago, today).catch(e => { console.error('[buildP1] spend erro:', e.message); return []; }),
