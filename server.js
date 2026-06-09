@@ -201,27 +201,38 @@ async function loadGoogleCampaignsFromMetabase(fromDate, toDate) {
   }
 }
 
+// ── Fuso de Brasília (UTC-3, sem horário de verão desde 2019) ──
+// Todas as datas de CALENDÁRIO (createdate do HubSpot, buckets diários/mensais)
+// são tratadas no fuso de Brasília para bater 100% com os relatórios nativos do HubSpot.
+// Datas do Metabase já vêm como data pura (string YYYY-MM-DD) e NÃO passam por aqui.
+const BR_OFFSET_MS = 3 * 60 * 60 * 1000;
+
+// Converte um instante (Date ou ISO/epoch) para 'YYYY-MM-DD' no fuso de Brasília
 function toYMD(d) {
   const dt = d instanceof Date ? d : new Date(d);
-  return dt.toISOString().slice(0, 10);
+  return new Date(dt.getTime() - BR_OFFSET_MS).toISOString().slice(0, 10);
 }
 
+// Instante UTC correspondente à meia-noite de Brasília de um dia (monthIndex 0-11)
+function brMidnight(year, monthIndex, day) {
+  return new Date(Date.UTC(year, monthIndex, day) + BR_OFFSET_MS);
+}
+
+// Soma n dias mantendo o instante (24h fixas — válido pois o Brasil não tem DST)
 function addDays(d, n) {
-  const r = new Date(d);
-  r.setDate(r.getDate() + n);
-  return r;
+  return new Date(d.getTime() + n * 24 * 60 * 60 * 1000);
 }
 
+// Meia-noite de Brasília do dia (em Brasília) que contém o instante d
 function startOfDay(d) {
-  const r = new Date(d);
-  r.setHours(0, 0, 0, 0);
-  return r;
+  const [y, m, day] = toYMD(d).split('-').map(Number);
+  return brMidnight(y, m - 1, day);
 }
 
+// "Ontem" (D-1) em Brasília, como instante da meia-noite de Brasília
 function getYesterdayDate() {
-  const yesterday = new Date();
-  yesterday.setDate(yesterday.getDate() - 1);
-  return startOfDay(yesterday);
+  const [y, m, day] = toYMD(new Date()).split('-').map(Number);
+  return brMidnight(y, m - 1, day - 1); // Date.UTC normaliza day-1
 }
 
 // ── /api/p1 ───────────────────────────────────────────────────
@@ -236,14 +247,15 @@ async function buildP1() {
   const d60ago = addDays(today, -60);
   const d90ago = addDays(today, -90);
 
-  // Dynamic monthly comparison: 01-today(current month) vs 01-sameday(previous month) [Opção B]
-  const currentDay = today.getDate();
-  const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
-  const monthStartPrev = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-  // Handle months with different days (e.g., February has 28/29, others have 31)
-  const lastMonthMaxDay = new Date(today.getFullYear(), today.getMonth(), 0).getDate();
+  // Datas de calendário derivadas no fuso de Brasília (a partir das partes de 'today')
+  const [ty, tm, td] = toYMD(today).split('-').map(Number); // tm = 1-12
+  const currentDay = td;
+  const monthStart     = brMidnight(ty, tm - 1, 1);
+  const monthStartPrev = brMidnight(ty, tm - 2, 1); // Date.UTC normaliza mês negativo
+  // Lida com meses de tamanhos diferentes (fev 28/29 etc.)
+  const lastMonthMaxDay = new Date(Date.UTC(ty, tm - 1, 0)).getUTCDate();
   const lastMonthDay = Math.min(currentDay, lastMonthMaxDay);
-  const datePrev = new Date(monthStartPrev.getFullYear(), monthStartPrev.getMonth(), lastMonthDay);
+  const datePrev = brMidnight(ty, tm - 2, lastMonthDay);
 
   // ── Todas as queries em PARALELO — reduz ~3min → ~40s ────────
   console.log('[buildP1] Iniciando 7 queries em paralelo...');
@@ -388,17 +400,17 @@ async function buildP1() {
     dailySpend[dt] = (dailySpend[dt] || 0) + row.cost_brl;
   });
 
-  // KPI 7d current
+  // KPI 7d current — itera por dia usando addDays (independente do fuso do host)
   function sumRange(map, from, to, label) {
     let s = 0;
-    const cur = new Date(from);
+    let cur = new Date(from);
     const dates = [];
     while (cur < to) {
       const ym = toYMD(cur);
       const val = map[ym] || 0;
       if (val > 0 || dates.length < 3) dates.push(`${ym}:${val}`);
       s += val;
-      cur.setDate(cur.getDate() + 1);
+      cur = addDays(cur, 1);
     }
     if (label) console.log(`[sumRange] ${label}: total=${s}, dates=${dates.join(',')}, map keys=${Object.keys(map).length}`);
     return s;
@@ -555,10 +567,10 @@ async function buildP1() {
     g3Labels.push(label);
     const sp = sumRange(dailySpend, startD, addDays(endD, 1));
     let mqlCount = 0;
-    const cur = new Date(startD);
+    let cur = new Date(startD);
     while (cur <= endD) {
       mqlCount += dailyMQL[toYMD(cur)] || 0;
-      cur.setDate(cur.getDate() + 1);
+      cur = addDays(cur, 1);
     }
     g3CostMQL.push(mqlCount ? Math.round(sp / mqlCount) : null);
   }
@@ -640,8 +652,8 @@ async function buildP1() {
 async function buildP2() {
   const now = new Date();
   const today = getYesterdayDate(); // D-1: yesterday
-  const d24mAgo = new Date(today);
-  d24mAgo.setMonth(d24mAgo.getMonth() - 24);
+  const [ty, tm, td] = toYMD(today).split('-').map(Number); // partes em Brasília
+  const d24mAgo = brMidnight(ty, tm - 1 - 24, td); // Date.UTC normaliza mês negativo
 
   // ── 3 queries em PARALELO ─────────────────────────────────────
   console.log('[buildP2] Iniciando 3 queries em paralelo...');
@@ -707,9 +719,7 @@ async function buildP2() {
   // Build cohort rows
   const rows = [];
   for (let i = 23; i >= 0; i--) {
-    const d = new Date(today);
-    d.setMonth(d.getMonth() - i);
-    const ym = toYMD(d).slice(0, 7);
+    const ym = toYMD(brMidnight(ty, tm - 1 - i, 1)).slice(0, 7); // mês i atrás (Brasília)
     const mql = mqlByMonth[ym] || 0;
     const reuniao = reuniaoByMonth[ym] || 0;
     const ganho = wonByMonth[ym] ? wonByMonth[ym].count : 0;
@@ -762,14 +772,13 @@ async function buildCostMQLMonthly() {
     return memCache.g3Monthly;
   }
 
-  // Gera os meses do ano corrente dinamicamente (janeiro até mês atual)
-  const currentYear = new Date().getFullYear();
-  const currentMonth = new Date().getMonth() + 1; // 1-12
+  // Gera os meses do ano corrente dinamicamente (janeiro até mês atual) — fuso de Brasília
+  const [currentYear, currentMonth] = toYMD(new Date()).split('-').map(Number); // currentMonth = 1-12
   const MONTHS = [];
   for (let m = 1; m <= currentMonth; m++) {
     MONTHS.push(`${currentYear}-${String(m).padStart(2, '0')}`);
   }
-  const from = new Date(`${currentYear}-01-01T00:00:00.000Z`);
+  const from = brMidnight(currentYear, 0, 1); // 01/jan meia-noite Brasília
   const to   = new Date(); // até hoje
 
   try {
