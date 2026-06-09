@@ -269,7 +269,8 @@ async function buildP1() {
     googleCampaigns,
     reunioesRaw,
     campaignsAgg,
-    leadsContactsRes
+    leadsContactsRes,
+    mqlContactsRes
   ] = await Promise.all([
     // 1. Deals desde início do mês anterior (cobre MTD + LMTD para KPIs + últimos 30d para gráfico)
     hsSearchAll('deals', {
@@ -329,7 +330,16 @@ async function buildP1() {
         { propertyName: 'createdate', operator: 'LT',  value: String(todayEnd.getTime()) }
       ]}],
       properties: ['createdate', 'sub_origem']
-    }).catch(e => { console.error('[buildP1] leads contatos erro:', e.message); return []; })
+    }).catch(e => { console.error('[buildP1] leads contatos erro:', e.message); return []; }),
+    // 9. CONTATOS que viraram MQL (barra verde do gráfico de volume) — pela DATA de entrada no MQL, últimos ~30 dias
+    hsSearchAll('contacts', {
+      filterGroups: [{ filters: [
+        { propertyName: 'sub_origem', operator: 'EQ',  value: SUB_ORIGEM_GOOGLE_CONTACT },
+        { propertyName: 'hs_v2_date_entered_marketingqualifiedlead', operator: 'GTE', value: String(d30ago.getTime()) },
+        { propertyName: 'hs_v2_date_entered_marketingqualifiedlead', operator: 'LT',  value: String(todayEnd.getTime()) }
+      ]}],
+      properties: ['hs_v2_date_entered_marketingqualifiedlead', 'sub_origem']
+    }).catch(e => { console.error('[buildP1] mql contatos erro:', e.message); return []; })
   ]);
   console.log(`[buildP1] ✅ Paralelo concluído — leads:${allDealsRes.length} mql:${mqlDealsRes.length} frota:${contactsRaw.length} googleRows:${googleCampaigns.length} reunioes:${reunioesRaw.length} campaignsAgg:${campaignsAgg?.rows?.length ?? 'erro'}`);
 
@@ -338,7 +348,7 @@ async function buildP1() {
   // Build daily maps
   const dailyLeads = {};     // date -> count (Google Ads deals)
   const dailyMQL = {};       // date -> count (Meta Ads deals, for KPI)
-  const dailyGoogleMQL = {}; // date -> count (Google Ads + stage Reunião, for chart)
+  const dailyGoogleMQL = {}; // date -> count (CONTATOS que viraram MQL, pela data do MQL — barra verde do gráfico)
   const dailySpend = {};     // date -> spend
 
   // D-1 cutoff date
@@ -352,15 +362,23 @@ async function buildP1() {
     const dt = toYMD(new Date(d.properties.createdate));
     if (!dt || dt > yesterday) return;
     const subOrigem = d.properties.sub_origem || '';
-    // Leads = sub_origem Google Ads
+    // Leads = sub_origem Google Ads (barra azul do gráfico de volume)
     if (subOrigem === SUB_ORIGEM_GOOGLE) {
       dailyLeads[dt] = (dailyLeads[dt] || 0) + 1;
-      // Google Ads qualificados (stage Reunião) para barra verde do gráfico de volume
-      if (d.properties.dealstage === STAGE_REUNIAO) {
-        dailyGoogleMQL[dt] = (dailyGoogleMQL[dt] || 0) + 1;
-      }
     }
   });
+
+  // Barra verde "Qualificados Google Ads" = CONTATOS que viraram MQL, pela DATA de entrada no MQL
+  // (mesma definição do relatório "MQLs gerados" do HubSpot)
+  (mqlContactsRes || []).forEach(c => {
+    const raw = c.properties.hs_v2_date_entered_marketingqualifiedlead;
+    if (!raw) return;
+    const dt = toYMD(new Date(raw));
+    if (dt && dt <= yesterday) {
+      dailyGoogleMQL[dt] = (dailyGoogleMQL[dt] || 0) + 1;
+    }
+  });
+  console.log(`[P1] Contatos MQL (barra verde): ${(mqlContactsRes||[]).length} | dist:`, JSON.stringify(dailyGoogleMQL));
 
   // MQL (7D) = Deals with sub_origem = "Midia-Paga-Google-Ads" created in 7D
   console.log(`[P1] MQL Deals fetched: ${mqlDealsRes.length} | Filter: pipeline=${PIPELINE_PRE_VENDAS} + sub_origem=${SUB_ORIGEM_GOOGLE} | Period: ${toYMD(monthStartPrev)} to ${toYMD(today)}`);
