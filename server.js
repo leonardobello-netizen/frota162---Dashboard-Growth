@@ -423,6 +423,15 @@ async function buildP1() {
     dailySpend[dt] = (dailySpend[dt] || 0) + row.cost_brl;
   });
 
+  // ── Defasagem do spend (Metabase): até que dia há gasto carregado? ──────
+  // TODO(Google Ads API): quando GOOGLE_ADS_* estiverem no Railway, se spendStale
+  // → puxar o mês inteiro via Google Ads (fallback) em vez de usar o Metabase parcial.
+  const spendSource = 'metabase';
+  const spendDates = Object.keys(dailySpend).filter(d => d <= yesterday).sort();
+  const spendLatest = spendDates.length ? spendDates[spendDates.length - 1] : null;
+  const spendStale = !!spendLatest && spendLatest < yesterday; // não alcança D-1
+  if (spendStale) console.warn(`[P1] ⚠️ Spend Metabase DEFASADO: última data ${spendLatest} < D-1 ${yesterday}`);
+
   // KPI 7d current — itera por dia usando addDays (independente do fuso do host)
   function sumRange(map, from, to, label) {
     let s = 0;
@@ -462,15 +471,19 @@ async function buildP1() {
   const costPerMQLPrev  = mqlPrev   ? spendPrev / mqlPrev   : 0;
 
   // --- KPIs (MTD vs mesmo período do mês anterior) ---
-  console.log(`[P1] KPI MTD: leads=${leadsMTD}(ant ${leadsPrev}) mql=${mqlMTD}(ant ${mqlPrev}) reunião=${reuniaoMTD}(ant ${reuniaoPrev}) spend=${spendMTD}(ant ${spendPrev})`);
+  console.log(`[P1] KPI MTD: leads=${leadsMTD}(ant ${leadsPrev}) mql=${mqlMTD}(ant ${mqlPrev}) reunião=${reuniaoMTD}(ant ${reuniaoPrev}) spend=${spendMTD}(ant ${spendPrev}) | fonte=${spendSource} stale=${spendStale} até=${spendLatest}`);
   const metabaseOk = spendMTD > 0 || spendPrev > 0; // false = Metabase indisponível
+  // Aviso de defasagem para os cards de dinheiro (spend parcial)
+  const spendNote = (metabaseOk && spendStale && spendLatest)
+    ? `⚠️ spend (${spendSource}) só até ${spendLatest.slice(8,10)}/${spendLatest.slice(5,7)} — parcial`
+    : null;
   const kpis = [
     { label: 'Leads',        value: leadsMTD,   delta: pct(leadsMTD, leadsPrev),     format: 'number' },
     { label: 'MQL',          value: mqlMTD,     delta: pct(mqlMTD, mqlPrev),         format: 'number' },
     { label: 'Reunião',      value: reuniaoMTD, delta: pct(reuniaoMTD, reuniaoPrev), format: 'number' },
-    { label: 'Investimento', value: metabaseOk ? spendMTD : null,     delta: metabaseOk ? pct(spendMTD, spendPrev) : null,            format: 'currency', metabaseWarn: !metabaseOk },
-    { label: 'Custo/Lead',   value: metabaseOk ? costPerLead : null,  delta: metabaseOk ? pct(costPerLead, costPerLeadPrev) : null,   format: 'currency', invertDelta: true, metabaseWarn: !metabaseOk },
-    { label: 'Custo/MQL',    value: metabaseOk ? costPerMQL : null,   delta: metabaseOk ? pct(costPerMQL, costPerMQLPrev) : null,      format: 'currency', invertDelta: true, metabaseWarn: !metabaseOk }
+    { label: 'Investimento', value: metabaseOk ? spendMTD : null,     delta: metabaseOk ? pct(spendMTD, spendPrev) : null,            format: 'currency', metabaseWarn: !metabaseOk, note: spendNote },
+    { label: 'Custo/Lead',   value: metabaseOk ? costPerLead : null,  delta: metabaseOk ? pct(costPerLead, costPerLeadPrev) : null,   format: 'currency', invertDelta: true, metabaseWarn: !metabaseOk, note: spendNote },
+    { label: 'Custo/MQL',    value: metabaseOk ? costPerMQL : null,   delta: metabaseOk ? pct(costPerMQL, costPerMQLPrev) : null,      format: 'currency', invertDelta: true, metabaseWarn: !metabaseOk, note: spendNote }
   ];
 
   // --- Gráfico 1: Leads e MQL diários últimos 30d ---

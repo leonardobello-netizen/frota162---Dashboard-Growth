@@ -345,9 +345,12 @@ function renderKPIs(kpis) {
     } else {
       deltaHtml = `<div class="kpi-delta neutral">— sem dados ant.</div>`;
     }
+    const subtitle = k.note
+      ? `<div style="font-size:0.62rem;color:#f6ad55;margin-top:2px">${k.note}</div>`
+      : `<div style="font-size:0.7rem;color:#4a5568;margin-top:2px">mês atual</div>`;
     const valueHtml = k.metabaseWarn
       ? `<div class="kpi-value" style="font-size:1rem;color:#718096">sem dados</div><div style="font-size:0.65rem;color:#fc8181;margin-top:2px">⚠️ Metabase offline</div>`
-      : `<div class="kpi-value">${k.format === 'currency' ? fmt(Math.round(k.value), 'currency') : fmt(k.value, 'number')}</div><div style="font-size:0.7rem;color:#4a5568;margin-top:2px">mês atual</div>`;
+      : `<div class="kpi-value">${k.format === 'currency' ? fmt(Math.round(k.value), 'currency') : fmt(k.value, 'number')}</div>${subtitle}`;
     return `<div class="kpi-card">
       <div class="kpi-label">${k.label}</div>
       ${valueHtml}
