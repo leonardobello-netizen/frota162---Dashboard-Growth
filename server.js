@@ -760,10 +760,12 @@ async function buildP2() {
   // ── 3 queries em PARALELO ─────────────────────────────────────
   console.log('[buildP2] Iniciando 3 queries em paralelo...');
   const [wonDeals, pvDeals, googleCampaigns] = await Promise.all([
-    // 1. Deals GANHOS (qualquer pipeline de receita do relatório "Total MRR"), por data de fechamento (24m)
+    // 1. Deals GANHOS atribuídos ao GOOGLE ADS, nos pipelines de receita, por data de fechamento (24m)
+    //    Cohort = aquisição Google: MRR/Ganho/ROAS/CAC todos do Google (Opção A, 2026-06-10).
     hsSearchAll('deals', {
       filterGroups: [{ filters: [
         { propertyName: 'hs_is_closed_won', operator: 'EQ', value: 'true' },
+        { propertyName: 'sub_origem', operator: 'EQ',  value: SUB_ORIGEM_GOOGLE },
         { propertyName: 'pipeline',   operator: 'IN',  values: MRR_PIPELINES },
         { propertyName: 'closedate',  operator: 'GTE', value: String(d24mAgo.getTime()) },
         { propertyName: 'closedate',  operator: 'LTE', value: String(today.getTime()) }
