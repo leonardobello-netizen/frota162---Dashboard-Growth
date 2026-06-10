@@ -184,7 +184,7 @@
           <thead>
             <tr>
               <th>Mês</th><th>MQL</th><th>Reunião</th><th>Ganho</th>
-              <th>MRR (R$)</th><th>Spend (R$)</th><th>ROAS</th>
+              <th>MRR (R$)</th><th>Receita Google (R$)</th><th>Spend (R$)</th><th>ROAS</th>
               <th>CAC (R$)</th><th>LTV (R$)</th><th>LTV/CAC</th>
               <th>Ticket Médio (R$)</th><th>Payback (m)</th>
             </tr>
@@ -656,6 +656,7 @@ function renderCohortTable(rows) {
       <td>${r.reuniao ?? '—'}</td>
       <td>${r.ganho ?? '—'}</td>
       <td>${cellWithExp(r.mrr != null ? r.mrr : null, expected.mrr, 'currency')}</td>
+      <td>${r.receitaGoogle != null ? fmt(r.receitaGoogle, 'currency') : '—'}</td>
       <td>${r.spend != null ? fmt(r.spend, 'currency') : '—'}</td>
       <td>${cellWithExp(r.roas, expected.roas, 'dec')}</td>
       <td class="${cacClass}">${cellWithExp(r.cac, expected.cac, 'currency')}</td>

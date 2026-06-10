@@ -759,9 +759,19 @@ async function buildP2() {
 
   // ── 3 queries em PARALELO ─────────────────────────────────────
   console.log('[buildP2] Iniciando 3 queries em paralelo...');
-  const [wonDeals, pvDeals, googleCampaigns] = await Promise.all([
-    // 1. Deals GANHOS atribuídos ao GOOGLE ADS, nos pipelines de receita, por data de fechamento (24m)
-    //    Cohort = aquisição Google: MRR/Ganho/ROAS/CAC todos do Google (Opção A, 2026-06-10).
+  const [wonDeals, wonDealsGoogle, pvDeals, googleCampaigns] = await Promise.all([
+    // 1. Deals GANHOS — TODAS as origens, 6 pipelines de receita (MRR/Ganho do cohort = bate com relatório "Total MRR")
+    hsSearchAll('deals', {
+      filterGroups: [{ filters: [
+        { propertyName: 'hs_is_closed_won', operator: 'EQ', value: 'true' },
+        { propertyName: 'pipeline',   operator: 'IN',  values: MRR_PIPELINES },
+        { propertyName: 'closedate',  operator: 'GTE', value: String(d24mAgo.getTime()) },
+        { propertyName: 'closedate',  operator: 'LTE', value: String(today.getTime()) }
+      ]}],
+      properties: ['closedate', 'amount_in_home_currency', 'dealname'],
+      limit: 100
+    }),
+    // 1b. Deals GANHOS atribuídos ao GOOGLE ADS (Opção B) — base de ROAS/CAC/LTV/Ticket/Payback
     hsSearchAll('deals', {
       filterGroups: [{ filters: [
         { propertyName: 'hs_is_closed_won', operator: 'EQ', value: 'true' },
@@ -811,13 +821,21 @@ async function buildP2() {
     reuniaoByMonth[ym] = (reuniaoByMonth[ym] || 0) + 1;
   });
 
-  // Won deals by close month
+  // Won deals by close month — TOTAL (todas origens) → MRR/Ganho exibidos (batem c/ relatório)
   const wonByMonth = {};
   wonDeals.forEach(d => {
     const ym = toYMD(new Date(new Date(d.properties.closedate).getTime())).slice(0, 7);
     if (!wonByMonth[ym]) wonByMonth[ym] = { count: 0, mrr: 0 };
     wonByMonth[ym].count++;
     wonByMonth[ym].mrr += parseFloat(d.properties.amount_in_home_currency || 0);
+  });
+  // Won deals GOOGLE por close month → base de ROAS/CAC/LTV/Ticket/Payback (eficiência de aquisição Google)
+  const wonGoogleByMonth = {};
+  wonDealsGoogle.forEach(d => {
+    const ym = toYMD(new Date(new Date(d.properties.closedate).getTime())).slice(0, 7);
+    if (!wonGoogleByMonth[ym]) wonGoogleByMonth[ym] = { count: 0, mrr: 0 };
+    wonGoogleByMonth[ym].count++;
+    wonGoogleByMonth[ym].mrr += parseFloat(d.properties.amount_in_home_currency || 0);
   });
 
   // Build cohort rows
@@ -826,17 +844,21 @@ async function buildP2() {
     const ym = toYMD(brMidnight(ty, tm - 1 - i, 1)).slice(0, 7); // mês i atrás (Brasília)
     const mql = mqlByMonth[ym] || 0;
     const reuniao = reuniaoByMonth[ym] || 0;
+    // MRR/Ganho = TOTAL (todas origens) — batem com o relatório "Total MRR"
     const ganho = wonByMonth[ym] ? wonByMonth[ym].count : 0;
     const mrr = wonByMonth[ym] ? wonByMonth[ym].mrr : 0;
+    // Base GOOGLE para eficiência (Opção B): ROAS/CAC/LTV/Ticket/Payback usam receita e ganhos do Google
+    const ganhoGoogle = wonGoogleByMonth[ym] ? wonGoogleByMonth[ym].count : 0;
+    const receitaGoogle = wonGoogleByMonth[ym] ? wonGoogleByMonth[ym].mrr : 0;
     const spend = Math.round((spendByMonth[ym] || 0) * 100) / 100;
-    const ltv = mrr * 8;
-    const roas = spend ? Math.round((mrr / spend) * 100) / 100 : null;
-    const cac = ganho ? Math.round(spend / ganho * 100) / 100 : null;
-    const ticketMedio = ganho ? Math.round(mrr / ganho * 100) / 100 : null;
+    const ltv = receitaGoogle * 8;
+    const roas = spend ? Math.round((receitaGoogle / spend) * 100) / 100 : null;
+    const cac = ganhoGoogle ? Math.round(spend / ganhoGoogle * 100) / 100 : null;
+    const ticketMedio = ganhoGoogle ? Math.round(receitaGoogle / ganhoGoogle * 100) / 100 : null;
     const payback = cac && ticketMedio ? Math.round(cac / ticketMedio * 10) / 10 : null;
     const ltvCac = cac && ltv ? Math.round(ltv / cac * 10) / 10 : null;
 
-    rows.push({ mes: ym, mql, reuniao, ganho, mrr: Math.round(mrr * 100) / 100, spend, roas, cac, ltv: Math.round(ltv * 100) / 100, ltvCac, ticketMedio, payback });
+    rows.push({ mes: ym, mql, reuniao, ganho, mrr: Math.round(mrr * 100) / 100, receitaGoogle: Math.round(receitaGoogle * 100) / 100, spend, roas, cac, ltv: Math.round(ltv * 100) / 100, ltvCac, ticketMedio, payback });
   }
 
   // Calcula Expected = média dos últimos 6 meses para cada métrica
