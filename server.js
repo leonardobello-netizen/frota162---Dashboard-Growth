@@ -70,6 +70,8 @@ const PIPELINE_PRE_VENDAS = '691581102';
 const PIPELINE_SALES = 'default';
 const STAGE_REUNIAO = '1012021273';
 const STAGE_DESQUALIFICADO = '1012021274';
+// Pipelines de receita do relatório "Total MRR" do HubSpot (exclui Pré-Vendas, POCs, Self-Onboarding, Gestão de Fundos)
+const MRR_PIPELINES = ['default', '693151525', '784015251', '772560517', '695821578', '725390999'];
 
 // ── Helpers ───────────────────────────────────────────────────
 function diskCachePath(key) {
@@ -758,15 +760,15 @@ async function buildP2() {
   // ── 3 queries em PARALELO ─────────────────────────────────────
   console.log('[buildP2] Iniciando 3 queries em paralelo...');
   const [wonDeals, pvDeals, googleCampaigns] = await Promise.all([
-    // 1. Deals Sales ganhos (24m)
+    // 1. Deals GANHOS (qualquer pipeline de receita do relatório "Total MRR"), por data de fechamento (24m)
     hsSearchAll('deals', {
       filterGroups: [{ filters: [
-        { propertyName: 'pipeline',   operator: 'EQ',  value: PIPELINE_SALES },
-        { propertyName: 'dealstage',  operator: 'EQ',  value: 'closedwon' },
+        { propertyName: 'hs_is_closed_won', operator: 'EQ', value: 'true' },
+        { propertyName: 'pipeline',   operator: 'IN',  values: MRR_PIPELINES },
         { propertyName: 'closedate',  operator: 'GTE', value: String(d24mAgo.getTime()) },
         { propertyName: 'closedate',  operator: 'LTE', value: String(today.getTime()) }
       ]}],
-      properties: ['closedate', 'amount', 'dealname'],
+      properties: ['closedate', 'amount_in_home_currency', 'dealname'],
       limit: 100
     }),
     // 2. Deals Pré-Vendas Google Ads (24m)
@@ -813,7 +815,7 @@ async function buildP2() {
     const ym = toYMD(new Date(new Date(d.properties.closedate).getTime())).slice(0, 7);
     if (!wonByMonth[ym]) wonByMonth[ym] = { count: 0, mrr: 0 };
     wonByMonth[ym].count++;
-    wonByMonth[ym].mrr += parseFloat(d.properties.amount || 0);
+    wonByMonth[ym].mrr += parseFloat(d.properties.amount_in_home_currency || 0);
   });
 
   // Build cohort rows
