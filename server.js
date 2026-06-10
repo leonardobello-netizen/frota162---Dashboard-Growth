@@ -324,6 +324,7 @@ async function buildP1() {
   // Limites superiores (exclusivos) — incluem D-1 / o mesmo dia do mês anterior por completo
   const todayEnd    = addDays(today, 1);    // início de hoje (D-1 inteiro incluído)
   const datePrevEnd = addDays(datePrev, 1); // mesmo dia do mês anterior, inteiro incluído
+  const frotaFrom   = brMidnight(ty, tm - 3, 1); // 1º dia de 2 meses atrás (gráfico de frota = 3 meses)
 
   // ── Todas as queries em PARALELO — reduz ~3min → ~40s ────────
   console.log('[buildP1] Iniciando 7 queries em paralelo...');
@@ -356,13 +357,14 @@ async function buildP1() {
       ]}],
       properties: ['createdate', 'sub_origem']
     }),
-    // 3. Frota 90d — DEALS Google Ads no Pré-Vendas, EXCLUINDO desqualificados (leads descartados poluíam o "Não informado")
+    // 3. Frota — DEALS Google Ads no Pré-Vendas, EXCLUINDO desqualificados; últimos 3 meses (distribuição por mês)
     hsSearchAll('deals', {
       filterGroups: [{ filters: [
         { propertyName: 'pipeline',   operator: 'EQ',  value: PIPELINE_PRE_VENDAS },
         { propertyName: 'sub_origem',  operator: 'EQ',  value: SUB_ORIGEM_GOOGLE },
         { propertyName: 'dealstage',  operator: 'NEQ', value: STAGE_DESQUALIFICADO },
-        { propertyName: 'createdate', operator: 'GTE', value: String(d90ago.getTime()) }
+        { propertyName: 'createdate', operator: 'GTE', value: String(frotaFrom.getTime()) },
+        { propertyName: 'createdate', operator: 'LT',  value: String(todayEnd.getTime()) }
       ]}],
       properties: ['createdate', 'dealname', 'qual_a_quantidade_de_veiculos_na_sua_frota_']
     }).catch(e => { console.error('[buildP1] frota erro:', e.message); return []; }),
@@ -625,52 +627,32 @@ async function buildP1() {
     return FROTA_MAP[key] || 'Não informado';
   }
 
-  function frotaCounts(contacts) {
-    const counts = {};
-    faixas.forEach(f => counts[f] = 0);
-    const frotaDistribution = {};
+  // Distribuição por MÊS (últimos 3 meses) — substitui as janelas cumulativas 30/60/90.
+  // Cumulativo (90⊇60⊇30) era sempre "escadinha" crescente; por mês dá pra ver se a qualidade melhora.
+  const MESES_PT = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
+  const currentYM = toYMD(today).slice(0, 7);
+  const frotaMonthKeys = [];
+  for (let i = 2; i >= 0; i--) frotaMonthKeys.push(toYMD(brMidnight(ty, tm - 1 - i, 1)).slice(0, 7));
 
-    // Debug: log sample contact properties to find correct field name
-    if (contacts.length > 0) {
-      const sample = contacts[0];
-      console.log(`[buildP1] Sample contact properties keys:`, Object.keys(sample.properties || {}));
-      console.log(`[buildP1] Sample contact full object:`, JSON.stringify(sample).substring(0, 500));
-    }
+  const frotaByMonth = {};
+  frotaMonthKeys.forEach(ym => { frotaByMonth[ym] = {}; faixas.forEach(f => frotaByMonth[ym][f] = 0); });
+  contactsRaw.forEach(d => {
+    const ym = toYMD(new Date(d.properties.createdate)).slice(0, 7);
+    if (!frotaByMonth[ym]) return; // fora dos 3 meses
+    frotaByMonth[ym][frotaFaixa(d.properties.qual_a_quantidade_de_veiculos_na_sua_frota_)]++;
+  });
 
-    contacts.forEach(c => {
-      // Get frota from the correct HubSpot field
-      const v = c.properties.qual_a_quantidade_de_veiculos_na_sua_frota_;
+  const mesLabel = (ym) => {
+    const [y, m] = ym.split('-').map(Number);
+    const base = `${MESES_PT[m - 1]}/${String(y).slice(2)}`;
+    return ym === currentYM ? `${base} (parcial)` : base;
+  };
 
-      const faixa = frotaFaixa(v);
-      counts[faixa]++;
-      frotaDistribution[v || 'undefined'] = (frotaDistribution[v || 'undefined'] || 0) + 1;
-    });
-    if (contacts.length > 0) {
-      console.log(`[buildP1] Frota distribution by value: ${JSON.stringify(frotaDistribution)}`);
-      console.log(`[buildP1] Frota distribution by range: ${JSON.stringify(counts)}`);
-    }
-    return faixas.map(f => counts[f]);
-  }
-
-  const contacts30 = contactsRaw.filter(c => new Date(new Date(c.properties.createdate).getTime()) >= d30ago);
-  const contacts60 = contactsRaw.filter(c => new Date(new Date(c.properties.createdate).getTime()) >= d60ago);
-  const contacts90 = contactsRaw;
-
-  console.log(`[buildP1] Frota distribution - Total: ${contactsRaw.length}, 30D: ${contacts30.length}, 60D: ${contacts60.length}, 90D: ${contacts90.length}`);
-
-  // Log frota values for debugging
-  const frotaValues30 = contacts30.map(c => c.properties.qual_a_quantidade_de_veiculos_na_sua_frota_).filter(v => v);
-  const frotaValues60 = contacts60.map(c => c.properties.qual_a_quantidade_de_veiculos_na_sua_frota_).filter(v => v);
-  const frotaValues90 = contacts90.map(c => c.properties.qual_a_quantidade_de_veiculos_na_sua_frota_).filter(v => v);
-
-  console.log(`[buildP1] Frota values with data - 30D: ${frotaValues30.length}, 60D: ${frotaValues60.length}, 90D: ${frotaValues90.length}`);
-  if (frotaValues30.length > 0) console.log(`[buildP1] Sample frota values (30D):`, frotaValues30.slice(0, 5));
+  console.log(`[buildP1] Frota por mês: ${frotaMonthKeys.map(ym => `${ym}=${faixas.reduce((s,f)=>s+frotaByMonth[ym][f],0)}`).join(' ')}`);
 
   const g2 = {
     labels: faixas,
-    d30: frotaCounts(contacts30),
-    d60: frotaCounts(contacts60),
-    d90: frotaCounts(contacts90)
+    series: frotaMonthKeys.map(ym => ({ label: mesLabel(ym), data: faixas.map(f => frotaByMonth[ym][f]) }))
   };
 
   // --- Gráfico 3: Custo/MQL rolling 7d ---
