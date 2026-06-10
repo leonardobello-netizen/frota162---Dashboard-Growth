@@ -324,7 +324,7 @@ async function buildP1() {
   // Limites superiores (exclusivos) — incluem D-1 / o mesmo dia do mês anterior por completo
   const todayEnd    = addDays(today, 1);    // início de hoje (D-1 inteiro incluído)
   const datePrevEnd = addDays(datePrev, 1); // mesmo dia do mês anterior, inteiro incluído
-  const frotaFrom   = brMidnight(ty, tm - 3, 1); // 1º dia de 2 meses atrás (gráfico de frota = 3 meses)
+  const frotaFrom   = brMidnight(ty, 0, 1); // 1º de janeiro do ano corrente (gráfico de frota = ano todo)
 
   // ── Todas as queries em PARALELO — reduz ~3min → ~40s ────────
   console.log('[buildP1] Iniciando 7 queries em paralelo...');
@@ -631,14 +631,15 @@ async function buildP1() {
   // Cumulativo (90⊇60⊇30) era sempre "escadinha" crescente; por mês dá pra ver se a qualidade melhora.
   const MESES_PT = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
   const currentYM = toYMD(today).slice(0, 7);
+  // Todos os 12 meses do ano corrente (meses futuros ficam vazios e preenchem conforme entram leads)
   const frotaMonthKeys = [];
-  for (let i = 2; i >= 0; i--) frotaMonthKeys.push(toYMD(brMidnight(ty, tm - 1 - i, 1)).slice(0, 7));
+  for (let m = 0; m < 12; m++) frotaMonthKeys.push(toYMD(brMidnight(ty, m, 1)).slice(0, 7));
 
   const frotaByMonth = {};
   frotaMonthKeys.forEach(ym => { frotaByMonth[ym] = {}; faixas.forEach(f => frotaByMonth[ym][f] = 0); });
   contactsRaw.forEach(d => {
     const ym = toYMD(new Date(d.properties.createdate)).slice(0, 7);
-    if (!frotaByMonth[ym]) return; // fora dos 3 meses
+    if (!frotaByMonth[ym]) return; // fora do ano corrente
     frotaByMonth[ym][frotaFaixa(d.properties.qual_a_quantidade_de_veiculos_na_sua_frota_)]++;
   });
 
@@ -650,9 +651,10 @@ async function buildP1() {
 
   console.log(`[buildP1] Frota por mês: ${frotaMonthKeys.map(ym => `${ym}=${faixas.reduce((s,f)=>s+frotaByMonth[ym][f],0)}`).join(' ')}`);
 
+  // Eixo X = meses; cada faixa de placas é uma SÉRIE empilhada (nº de leads)
   const g2 = {
-    labels: faixas,
-    series: frotaMonthKeys.map(ym => ({ label: mesLabel(ym), data: faixas.map(f => frotaByMonth[ym][f]) }))
+    labels: frotaMonthKeys.map(mesLabel),
+    series: faixas.map(f => ({ label: f, data: frotaMonthKeys.map(ym => frotaByMonth[ym][f]) }))
   };
 
   // --- Gráfico 3: Custo/MQL rolling 7d ---

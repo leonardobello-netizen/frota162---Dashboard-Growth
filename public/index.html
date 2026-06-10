@@ -385,18 +385,20 @@ function renderFrotaChart(g2) {
   wrap.className = 'skeleton-chart loaded';
   wrap.innerHTML = '<div class="chart-card"><canvas id="chart-frota"></canvas></div>';
   const ctx = document.getElementById('chart-frota').getContext('2d');
-  // Distribuição por mês (mais antigo → atual): azul, verde, âmbar
-  const palette = ['rgba(99,179,237,0.7)', 'rgba(72,187,120,0.7)', 'rgba(246,173,85,0.7)'];
-  const series = g2.series || [];
-  const datasets = series.map((s, i) => ({
+  // Eixo X = meses; barras empilhadas por faixa. Cor: claro=frota pequena → escuro/quente=grande, cinza=não informado
+  const FROTA_COLORS = ['#bee3f8','#90cdf4','#63b3ed','#4299e1','#3182ce','#48bb78','#38a169','#2f855a','#ed8936','#dd6b20','#718096'];
+  const datasets = (g2.series || []).map((s, i) => ({
     label: s.label,
     data: s.data,
-    backgroundColor: palette[i % palette.length]
+    backgroundColor: FROTA_COLORS[i % FROTA_COLORS.length]
   }));
   new Chart(ctx, {
     type: 'bar',
     data: { labels: g2.labels, datasets },
-    options: mergeDeep(CHART_DEFAULTS, { plugins: { legend: { labels: { color: '#a0aec0' } } } })
+    options: mergeDeep(CHART_DEFAULTS, {
+      plugins: { legend: { labels: { color: '#a0aec0' } } },
+      scales: { x: { stacked: true }, y: { stacked: true } }
+    })
   });
 }
 
