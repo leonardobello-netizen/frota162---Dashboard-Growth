@@ -202,6 +202,70 @@ async function loadGoogleCampaignsFromMetabase(fromDate, toDate) {
   }
 }
 
+// ── Google Ads API — fallback de spend quando o Metabase atrasa ──────────────
+// DORMENTE até as GOOGLE_ADS_* estarem nas env vars do Railway.
+// Retorna null se não configurado OU em erro → o chamador mantém o Metabase + aviso.
+const GOOGLE_ADS_API_VERSION = process.env.GOOGLE_ADS_API_VERSION || 'v18';
+
+async function getGoogleAdsAccessToken() {
+  const params = new URLSearchParams({
+    client_id:     process.env.GOOGLE_ADS_CLIENT_ID,
+    client_secret: process.env.GOOGLE_ADS_CLIENT_SECRET,
+    refresh_token: process.env.GOOGLE_ADS_REFRESH_TOKEN,
+    grant_type:    'refresh_token'
+  });
+  const res = await axios.post('https://oauth2.googleapis.com/token', params.toString(), {
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    timeout: 20000
+  });
+  return res.data.access_token;
+}
+
+// Spend diário do Google Ads via GAQL. Retorna [{date:'YYYY-MM-DD', cost_brl, campaign_name}] ou null.
+async function loadGoogleAdsSpend(fromDate, toDate) {
+  const devToken = process.env.GOOGLE_ADS_DEVELOPER_TOKEN;
+  const customerId = process.env.GOOGLE_ADS_CUSTOMER_ID;
+  // Não configurado → indisponível (caller mantém Metabase + aviso de defasagem)
+  if (!devToken || !customerId || !process.env.GOOGLE_ADS_CLIENT_ID ||
+      !process.env.GOOGLE_ADS_CLIENT_SECRET || !process.env.GOOGLE_ADS_REFRESH_TOKEN) {
+    return null;
+  }
+  const cid = String(customerId).replace(/[^0-9]/g, '');
+  const from = toYMD(fromDate), to = toYMD(toDate);
+  const query = `SELECT segments.date, campaign.name, metrics.cost_micros FROM campaign WHERE segments.date BETWEEN '${from}' AND '${to}'`;
+  try {
+    const accessToken = await getGoogleAdsAccessToken();
+    const headers = {
+      'Authorization': `Bearer ${accessToken}`,
+      'developer-token': devToken,
+      'Content-Type': 'application/json'
+    };
+    if (process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID) {
+      headers['login-customer-id'] = String(process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID).replace(/[^0-9]/g, '');
+    }
+    const url = `https://googleads.googleapis.com/${GOOGLE_ADS_API_VERSION}/customers/${cid}/googleAds:searchStream`;
+    const res = await axios.post(url, { query }, { headers, timeout: 60000 });
+    // searchStream retorna um array de batches: [{results:[...]}, ...]
+    const batches = Array.isArray(res.data) ? res.data : [res.data];
+    const out = [];
+    batches.forEach(b => (b.results || []).forEach(r => {
+      const date = r.segments && r.segments.date;
+      const micros = r.metrics && r.metrics.costMicros;
+      if (date) out.push({
+        date,
+        cost_brl: (Number(micros) || 0) / 1e6,
+        campaign_name: (r.campaign && r.campaign.name) || '(sem nome)'
+      });
+    }));
+    console.log(`[loadGoogleAdsSpend] ${out.length} linhas ${from}→${to} | total R$ ${out.reduce((s,x)=>s+x.cost_brl,0).toFixed(2)}`);
+    return out;
+  } catch (e) {
+    const detail = e.response ? JSON.stringify(e.response.data).slice(0, 400) : e.message;
+    console.error('[loadGoogleAdsSpend] Erro:', detail);
+    return null;
+  }
+}
+
 // ── Fuso de Brasília (UTC-3, sem horário de verão desde 2019) ──
 // Todas as datas de CALENDÁRIO (createdate do HubSpot, buckets diários/mensais)
 // são tratadas no fuso de Brasília para bater 100% com os relatórios nativos do HubSpot.
@@ -424,13 +488,33 @@ async function buildP1() {
   });
 
   // ── Defasagem do spend (Metabase): até que dia há gasto carregado? ──────
-  // TODO(Google Ads API): quando GOOGLE_ADS_* estiverem no Railway, se spendStale
-  // → puxar o mês inteiro via Google Ads (fallback) em vez de usar o Metabase parcial.
-  const spendSource = 'metabase';
-  const spendDates = Object.keys(dailySpend).filter(d => d <= yesterday).sort();
-  const spendLatest = spendDates.length ? spendDates[spendDates.length - 1] : null;
-  const spendStale = !!spendLatest && spendLatest < yesterday; // não alcança D-1
+  let spendSource = 'metabase';
+  let spendDates = Object.keys(dailySpend).filter(d => d <= yesterday).sort();
+  let spendLatest = spendDates.length ? spendDates[spendDates.length - 1] : null;
+  let spendStale = !!spendLatest && spendLatest < yesterday; // não alcança D-1
   if (spendStale) console.warn(`[P1] ⚠️ Spend Metabase DEFASADO: última data ${spendLatest} < D-1 ${yesterday}`);
+
+  // FALLBACK: Metabase atrasado → troca o MÊS INTEIRO atual pelo Google Ads (se configurado).
+  // Dormente sem credenciais (loadGoogleAdsSpend retorna null → mantém Metabase + aviso).
+  if (spendStale) {
+    const gads = await loadGoogleAdsSpend(monthStart, today);
+    if (gads && gads.length) {
+      const curYM = toYMD(monthStart).slice(0, 7);
+      Object.keys(dailySpend).forEach(d => { if (d.slice(0, 7) === curYM) delete dailySpend[d]; });
+      gads.forEach(row => {
+        const dt = typeof row.date === 'string' ? row.date.split('T')[0] : toYMD(row.date);
+        if (!dt || dt > yesterday || dt.slice(0, 7) !== curYM) return;
+        dailySpend[dt] = (dailySpend[dt] || 0) + row.cost_brl;
+      });
+      spendSource = 'google_ads';
+      spendDates = Object.keys(dailySpend).filter(d => d <= yesterday).sort();
+      spendLatest = spendDates.length ? spendDates[spendDates.length - 1] : null;
+      spendStale = !!spendLatest && spendLatest < yesterday;
+      console.log(`[P1] ✅ Fallback Google Ads aplicado em ${curYM}. Última data: ${spendLatest}, stale=${spendStale}`);
+    } else {
+      console.warn('[P1] Fallback Google Ads indisponível (sem credencial/erro) → mantém Metabase + aviso');
+    }
+  }
 
   // KPI 7d current — itera por dia usando addDays (independente do fuso do host)
   function sumRange(map, from, to, label) {
@@ -473,10 +557,13 @@ async function buildP1() {
   // --- KPIs (MTD vs mesmo período do mês anterior) ---
   console.log(`[P1] KPI MTD: leads=${leadsMTD}(ant ${leadsPrev}) mql=${mqlMTD}(ant ${mqlPrev}) reunião=${reuniaoMTD}(ant ${reuniaoPrev}) spend=${spendMTD}(ant ${spendPrev}) | fonte=${spendSource} stale=${spendStale} até=${spendLatest}`);
   const metabaseOk = spendMTD > 0 || spendPrev > 0; // false = Metabase indisponível
-  // Aviso de defasagem para os cards de dinheiro (spend parcial)
-  const spendNote = (metabaseOk && spendStale && spendLatest)
-    ? `⚠️ spend (${spendSource}) só até ${spendLatest.slice(8,10)}/${spendLatest.slice(5,7)} — parcial`
-    : null;
+  // Aviso de fonte/defasagem para os cards de dinheiro
+  let spendNote = null;
+  if (metabaseOk && spendStale && spendLatest) {
+    spendNote = `⚠️ spend (${spendSource}) só até ${spendLatest.slice(8,10)}/${spendLatest.slice(5,7)} — parcial`;
+  } else if (spendSource === 'google_ads') {
+    spendNote = 'via Google Ads (Metabase atrasado)';
+  }
   const kpis = [
     { label: 'Leads',        value: leadsMTD,   delta: pct(leadsMTD, leadsPrev),     format: 'number' },
     { label: 'MQL',          value: mqlMTD,     delta: pct(mqlMTD, mqlPrev),         format: 'number' },
