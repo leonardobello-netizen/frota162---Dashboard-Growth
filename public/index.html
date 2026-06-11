@@ -390,7 +390,11 @@ function renderFrotaChart(g2) {
   const th = ['Range'].concat(g2.meses.map(m => m.parcial ? m.label : m.label)).concat(['Média'])
     .map((h, i) => `<th style="padding:6px 8px;text-align:${i===0?'left':'center'};color:#a0aec0;font-size:0.72rem;white-space:nowrap;border-bottom:1px solid #2d3748">${h}</th>`).join('');
   const trs = g2.rows.map(r => {
-    const cells = r.pcts.map(v => `<td style="padding:6px 8px;text-align:center;color:#cbd5e0">${v===null?'<span style="color:#4a5568">—</span>':v+'%'}</td>`).join('');
+    const cells = r.pcts.map((v, i) => {
+      const c = (r.cores || [])[i];
+      const st = c ? `background:${COR[c]};color:#1a202c;font-weight:600` : 'color:#cbd5e0';
+      return `<td style="padding:6px 8px;text-align:center;${st}">${v===null?'<span style="color:#4a5568">—</span>':v+'%'}</td>`;
+    }).join('');
     const mediaStyle = r.cor
       ? `background:${COR[r.cor]};color:#1a202c;font-weight:700;border-radius:4px`
       : 'color:#e2e8f0;font-weight:700';
@@ -400,9 +404,10 @@ function renderFrotaChart(g2) {
   wrap.innerHTML = `<div class="chart-card" style="overflow-x:auto">
     <table style="width:100%;border-collapse:collapse;font-size:0.8rem"><thead><tr>${th}</tr></thead><tbody>${trs}</tbody></table>
     <div style="margin-top:10px;font-size:0.7rem;color:#718096;line-height:1.5">
-      Cor na <b>Média</b> = tendência (último mês com dados vs anterior).
+      Cor de <b>cada mês</b> = variação da % vs o mês anterior.
       Frota pequena (Micro/Pequeno): 🟠 subindo = ruim · 🟢 caindo = bom.
       Frota grande (Médio/Grande/Enterprise): 🟢 subindo = bom · 🔴 caindo = ruim.
+      Coluna <b>Média</b> segue a tendência geral (último mês vs anterior).
       % = participação do range no total de leads do mês (inclui "Não informado").
     </div>
   </div>`;

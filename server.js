@@ -656,19 +656,28 @@ async function buildP1() {
   });
 
   const mesesMeta = anoMeses.map(ym => ({ ym, label: mesLabel(ym), parcial: ym === currentYM }));
+  // cor por DIREÇÃO da % (subindo/caindo) conforme a categoria do range
+  const corDirecao = (cat, atual, anterior) => {
+    if (cat === 'neutro' || atual === null || anterior === null) return null;
+    if (atual > anterior) return (cat === 'pequena') ? 'laranja' : 'verde';   // subindo
+    if (atual < anterior) return (cat === 'pequena') ? 'verde'   : 'vermelho'; // caindo
+    return null; // igual
+  };
   const g2Rows = RANGES.map(r => {
     const pcts = anoMeses.map(ym => monthTotal[ym] === 0 ? null : Math.round((monthRangeCount[ym][r.nome] / monthTotal[ym]) * 1000) / 10);
     const comDados = pcts.filter(p => p !== null);
     const media = comDados.length ? Math.round((comDados.reduce((a, b) => a + b, 0) / comDados.length) * 10) / 10 : null;
-    // Tendência: 2 últimos meses COM dados (inclui o mês parcial — trocável p/ só fechados se pedido).
+    // Cor POR MÊS: compara cada mês com o mês anterior COM dados (1º mês fica sem cor).
+    const cores = pcts.map((v, i) => {
+      if (v === null) return null;
+      let j = i - 1; while (j >= 0 && pcts[j] === null) j--;
+      return j < 0 ? null : corDirecao(r.cat, v, pcts[j]);
+    });
+    // Cor da MÉDIA: tendência dos 2 últimos meses COM dados (inclui o parcial — trocável p/ só fechados).
     let cor = null;
     const idxs = pcts.map((p, i) => p !== null ? i : -1).filter(i => i >= 0);
-    if (idxs.length >= 2 && r.cat !== 'neutro') {
-      const last = pcts[idxs[idxs.length - 1]], prev = pcts[idxs[idxs.length - 2]];
-      if (last > prev)      cor = (r.cat === 'pequena') ? 'laranja' : 'verde';    // subindo
-      else if (last < prev) cor = (r.cat === 'pequena') ? 'verde'   : 'vermelho'; // caindo
-    }
-    return { range: r.nome, cat: r.cat, pcts, media, cor };
+    if (idxs.length >= 2) cor = corDirecao(r.cat, pcts[idxs[idxs.length - 1]], pcts[idxs[idxs.length - 2]]);
+    return { range: r.nome, cat: r.cat, pcts, cores, media, cor };
   });
 
   console.log(`[buildP1] Frota ranges (% mês): totais ${anoMeses.map(ym => `${ym}=${monthTotal[ym]}`).filter(s => !s.endsWith('=0')).join(' ')}`);
