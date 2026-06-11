@@ -340,12 +340,13 @@ async function buildP1() {
     leadsContactsRes,
     mqlContactsRes
   ] = await Promise.all([
-    // 1. Deals desde início do mês anterior (cobre MTD + LMTD para KPIs + últimos 30d para gráfico)
+    // 1. Deals Google no Pré-Vendas desde 1º/jan (alimenta a barra azul do gráfico de volume — ano todo)
     hsSearchAll('deals', {
       filterGroups: [{ filters: [
         { propertyName: 'pipeline',   operator: 'EQ',  value: PIPELINE_PRE_VENDAS },
-        { propertyName: 'createdate', operator: 'GTE', value: String(monthStartPrev.getTime()) },
-        { propertyName: 'createdate', operator: 'LTE', value: String(today.getTime()) }
+        { propertyName: 'sub_origem', operator: 'EQ',  value: SUB_ORIGEM_GOOGLE },
+        { propertyName: 'createdate', operator: 'GTE', value: String(frotaFrom.getTime()) },
+        { propertyName: 'createdate', operator: 'LT',  value: String(todayEnd.getTime()) }
       ]}],
       properties: ['createdate', 'dealname', 'sub_origem', 'dealstage']
     }),
@@ -403,11 +404,11 @@ async function buildP1() {
       ]}],
       properties: ['createdate', 'sub_origem']
     }).catch(e => { console.error('[buildP1] leads contatos erro:', e.message); return []; }),
-    // 9. CONTATOS que viraram MQL (barra verde do gráfico de volume) — pela DATA de entrada no MQL, últimos ~30 dias
+    // 9. CONTATOS que viraram MQL (barra verde do gráfico de volume) — pela DATA de entrada no MQL, desde 1º/jan
     hsSearchAll('contacts', {
       filterGroups: [{ filters: [
         { propertyName: 'sub_origem', operator: 'EQ',  value: SUB_ORIGEM_GOOGLE_CONTACT },
-        { propertyName: 'hs_v2_date_entered_marketingqualifiedlead', operator: 'GTE', value: String(d30ago.getTime()) },
+        { propertyName: 'hs_v2_date_entered_marketingqualifiedlead', operator: 'GTE', value: String(frotaFrom.getTime()) },
         { propertyName: 'hs_v2_date_entered_marketingqualifiedlead', operator: 'LT',  value: String(todayEnd.getTime()) }
       ]}],
       properties: ['hs_v2_date_entered_marketingqualifiedlead', 'sub_origem']
@@ -577,32 +578,39 @@ async function buildP1() {
     { label: 'Custo/MQL',    value: metabaseOk ? costPerMQL : null,   delta: metabaseOk ? pct(costPerMQL, costPerMQLPrev) : null,      format: 'currency', invertDelta: true, metabaseWarn: !metabaseOk, note: spendNote }
   ];
 
-  // --- Gráfico 1: Leads e MQL diários últimos 30d ---
-  const g1Labels = [];
-  const g1Leads = [];
-  const g1MQL = [];
-  const g1MM7Leads = []; // rolling 7d average of Leads
-  const g1MM7MQL = []; // rolling 7d average of MQL
-  for (let i = 29; i >= 0; i--) {
-    const d = toYMD(addDays(today, -i));
-    g1Labels.push(d);
-    g1Leads.push(dailyLeads[d] || 0);
-    g1MQL.push(dailyGoogleMQL[d] || 0);
-  }
+  // ── Helpers de mês (compartilhados pelos gráficos de volume e frota) ──
+  const MESES_PT = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
+  const currentYM = toYMD(today).slice(0, 7);
+  const anoMeses = []; // os 12 meses do ano corrente (YYYY-MM)
+  for (let m = 0; m < 12; m++) anoMeses.push(toYMD(brMidnight(ty, m, 1)).slice(0, 7));
+  const mesLabel = (ym) => {
+    const [y, m] = ym.split('-').map(Number);
+    const base = `${MESES_PT[m - 1]}/${String(y).slice(2)}`;
+    return ym === currentYM ? `${base} (parcial)` : base;
+  };
+  // Agrega um mapa diário {YYYY-MM-DD: n} em mensal {YYYY-MM: n}
+  const monthlyFromDaily = (map) => {
+    const out = {};
+    Object.entries(map).forEach(([d, v]) => { const ym = d.slice(0, 7); out[ym] = (out[ym] || 0) + v; });
+    return out;
+  };
 
-  // Calculate 7-day moving averages for both Leads and MQL
-  console.log(`[buildP1] Starting MM7 calculation: g1Labels.length=${g1Labels.length}, g1Leads.length=${g1Leads.length}, g1MQL.length=${g1MQL.length}`);
-  for (let i = 0; i < g1Labels.length; i++) {
-    const leadsSlice = g1Leads.slice(Math.max(0, i - 6), i + 1);
-    const mqlSlice = g1MQL.slice(Math.max(0, i - 6), i + 1);
+  // --- Gráfico 1: Leads e MQLs por MÊS (jan→dez; meses futuros vazios) ---
+  const leadsMensal = monthlyFromDaily(dailyLeads);
+  const mqlMensal = monthlyFromDaily(dailyGoogleMQL);
+  const g1Labels = anoMeses.map(mesLabel);
+  const g1Leads = anoMeses.map(ym => ym > currentYM ? null : (leadsMensal[ym] || 0));
+  const g1MQL = anoMeses.map(ym => ym > currentYM ? null : (mqlMensal[ym] || 0));
 
-    const leadsAvg = leadsSlice.reduce((a, b) => a + b, 0) / leadsSlice.length;
-    const mqlAvg = mqlSlice.reduce((a, b) => a + b, 0) / mqlSlice.length;
-
-    g1MM7Leads.push(Math.round(leadsAvg * 10) / 10);
-    g1MM7MQL.push(Math.round(mqlAvg * 10) / 10);
-  }
-  console.log(`[buildP1] MM7 calculated: g1MM7Leads.length=${g1MM7Leads.length}, g1MM7MQL.length=${g1MM7MQL.length}`);
+  // Média móvel de 3 MESES (tendência) — null nos meses futuros
+  const mm3 = (arr) => arr.map((v, i) => {
+    if (v === null) return null;
+    const slice = arr.slice(Math.max(0, i - 2), i + 1).filter(x => x !== null);
+    return Math.round((slice.reduce((a, b) => a + b, 0) / slice.length) * 10) / 10;
+  });
+  const g1MM7Leads = mm3(g1Leads);
+  const g1MM7MQL = mm3(g1MQL);
+  console.log(`[buildP1] Volume mensal: leads=${JSON.stringify(g1Leads)} mql=${JSON.stringify(g1MQL)}`);
 
   // --- Gráfico 2: Qualidade frota ---
   // Labels exatos conforme HubSpot (campo: "Qual a quantidade de placas na sua Frota?")
@@ -629,34 +637,21 @@ async function buildP1() {
     return FROTA_MAP[key] || 'Não informado';
   }
 
-  // Distribuição por MÊS (últimos 3 meses) — substitui as janelas cumulativas 30/60/90.
-  // Cumulativo (90⊇60⊇30) era sempre "escadinha" crescente; por mês dá pra ver se a qualidade melhora.
-  const MESES_PT = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
-  const currentYM = toYMD(today).slice(0, 7);
-  // Todos os 12 meses do ano corrente (meses futuros ficam vazios e preenchem conforme entram leads)
-  const frotaMonthKeys = [];
-  for (let m = 0; m < 12; m++) frotaMonthKeys.push(toYMD(brMidnight(ty, m, 1)).slice(0, 7));
-
+  // Distribuição por MÊS (ano corrente) — helpers de mês (MESES_PT/anoMeses/mesLabel) definidos na seção do gráfico de volume.
   const frotaByMonth = {};
-  frotaMonthKeys.forEach(ym => { frotaByMonth[ym] = {}; faixas.forEach(f => frotaByMonth[ym][f] = 0); });
+  anoMeses.forEach(ym => { frotaByMonth[ym] = {}; faixas.forEach(f => frotaByMonth[ym][f] = 0); });
   contactsRaw.forEach(d => {
     const ym = toYMD(new Date(d.properties.createdate)).slice(0, 7);
     if (!frotaByMonth[ym]) return; // fora do ano corrente
     frotaByMonth[ym][frotaFaixa(d.properties.qual_a_quantidade_de_veiculos_na_sua_frota_)]++;
   });
 
-  const mesLabel = (ym) => {
-    const [y, m] = ym.split('-').map(Number);
-    const base = `${MESES_PT[m - 1]}/${String(y).slice(2)}`;
-    return ym === currentYM ? `${base} (parcial)` : base;
-  };
-
-  console.log(`[buildP1] Frota por mês: ${frotaMonthKeys.map(ym => `${ym}=${faixas.reduce((s,f)=>s+frotaByMonth[ym][f],0)}`).join(' ')}`);
+  console.log(`[buildP1] Frota por mês: ${anoMeses.map(ym => `${ym}=${faixas.reduce((s,f)=>s+frotaByMonth[ym][f],0)}`).join(' ')}`);
 
   // Eixo X = meses; cada faixa de placas é uma SÉRIE empilhada (nº de leads)
   const g2 = {
-    labels: frotaMonthKeys.map(mesLabel),
-    series: faixas.map(f => ({ label: f, data: frotaMonthKeys.map(ym => frotaByMonth[ym][f]) }))
+    labels: anoMeses.map(mesLabel),
+    series: faixas.map(f => ({ label: f, data: anoMeses.map(ym => frotaByMonth[ym][f]) }))
   };
 
   // --- Gráfico 3: Custo/MQL rolling 7d ---

@@ -372,8 +372,8 @@ function renderVolumeChart(g1) {
       datasets: [
         { label: 'Leads Google Ads', data: g1.leads, backgroundColor: 'rgba(99,179,237,0.6)', borderColor: '#63b3ed', borderWidth: 1 },
         { label: 'Qualificados Google Ads', data: g1.mql, backgroundColor: 'rgba(72,187,120,0.6)', borderColor: '#48bb78', borderWidth: 1 },
-        { label: 'MM7D Leads', data: g1.mm7Leads, type: 'line', borderColor: '#f6ad55', borderWidth: 2.5, pointRadius: 0, tension: 0.3, yAxisID: 'y' },
-        { label: 'MM7D Qualificados', data: g1.mm7MQL, type: 'line', borderColor: '#48bb78', borderWidth: 2.5, pointRadius: 0, tension: 0.3, yAxisID: 'y', borderDash: [5, 5] }
+        { label: 'Média móvel 3M Leads', data: g1.mm7Leads, type: 'line', borderColor: '#f6ad55', borderWidth: 2.5, pointRadius: 0, tension: 0.3, yAxisID: 'y' },
+        { label: 'Média móvel 3M Qualificados', data: g1.mm7MQL, type: 'line', borderColor: '#48bb78', borderWidth: 2.5, pointRadius: 0, tension: 0.3, yAxisID: 'y', borderDash: [5, 5] }
       ]
     },
     options: mergeDeep(CHART_DEFAULTS, {})
