@@ -632,22 +632,48 @@ async function buildP1() {
     return FROTA_MAP[key] || 'Não informado';
   }
 
-  // Distribuição por MÊS (ano corrente) — helpers de mês (MESES_PT/anoMeses/mesLabel) definidos na seção do gráfico de volume.
-  const frotaByMonth = {};
-  anoMeses.forEach(ym => { frotaByMonth[ym] = {}; faixas.forEach(f => frotaByMonth[ym][f] = 0); });
+  // Tabela de % por RANGE × mês (jan→dez). Ranges agrupam as 11 faixas:
+  const RANGES = [
+    { nome: 'Micro',          faixas: ['1-5 placas','6-10 placas'],                       cat: 'pequena' }, // até 10
+    { nome: 'Pequeno',        faixas: ['11-20 placas','21-40 placas','41-80 placas'],      cat: 'pequena' }, // 11-80
+    { nome: 'Médio',          faixas: ['81-150 placas','151-300 placas'],                 cat: 'grande'  }, // 81-300
+    { nome: 'Grande',         faixas: ['301-600 placas','601-1.200 placas'],              cat: 'grande'  }, // 301-1200
+    { nome: 'Enterprise',     faixas: ['+1.200 placas'],                                  cat: 'grande'  }, // +1200
+    { nome: 'Não informado',  faixas: ['Não informado'],                                  cat: 'neutro'  }
+  ];
+  const faixaToRange = {};
+  RANGES.forEach(r => r.faixas.forEach(f => faixaToRange[f] = r.nome));
+
+  const monthRangeCount = {}; // ym -> { range -> count }
+  const monthTotal = {};      // ym -> total de leads (inclui Não informado)
+  anoMeses.forEach(ym => { monthRangeCount[ym] = {}; RANGES.forEach(r => monthRangeCount[ym][r.nome] = 0); monthTotal[ym] = 0; });
   contactsRaw.forEach(d => {
     const ym = toYMD(new Date(d.properties.createdate)).slice(0, 7);
-    if (!frotaByMonth[ym]) return; // fora do ano corrente
-    frotaByMonth[ym][frotaFaixa(d.properties.qual_a_quantidade_de_veiculos_na_sua_frota_)]++;
+    if (!monthRangeCount[ym]) return; // fora do ano corrente
+    const rng = faixaToRange[frotaFaixa(d.properties.qual_a_quantidade_de_veiculos_na_sua_frota_)] || 'Não informado';
+    monthRangeCount[ym][rng]++;
+    monthTotal[ym]++;
   });
 
-  console.log(`[buildP1] Frota por mês: ${anoMeses.map(ym => `${ym}=${faixas.reduce((s,f)=>s+frotaByMonth[ym][f],0)}`).join(' ')}`);
+  const mesesMeta = anoMeses.map(ym => ({ ym, label: mesLabel(ym), parcial: ym === currentYM }));
+  const g2Rows = RANGES.map(r => {
+    const pcts = anoMeses.map(ym => monthTotal[ym] === 0 ? null : Math.round((monthRangeCount[ym][r.nome] / monthTotal[ym]) * 1000) / 10);
+    const comDados = pcts.filter(p => p !== null);
+    const media = comDados.length ? Math.round((comDados.reduce((a, b) => a + b, 0) / comDados.length) * 10) / 10 : null;
+    // Tendência: 2 últimos meses COM dados (inclui o mês parcial — trocável p/ só fechados se pedido).
+    let cor = null;
+    const idxs = pcts.map((p, i) => p !== null ? i : -1).filter(i => i >= 0);
+    if (idxs.length >= 2 && r.cat !== 'neutro') {
+      const last = pcts[idxs[idxs.length - 1]], prev = pcts[idxs[idxs.length - 2]];
+      if (last > prev)      cor = (r.cat === 'pequena') ? 'laranja' : 'verde';    // subindo
+      else if (last < prev) cor = (r.cat === 'pequena') ? 'verde'   : 'vermelho'; // caindo
+    }
+    return { range: r.nome, cat: r.cat, pcts, media, cor };
+  });
 
-  // Eixo X = meses; cada faixa de placas é uma SÉRIE empilhada (nº de leads)
-  const g2 = {
-    labels: anoMeses.map(mesLabel),
-    series: faixas.map(f => ({ label: f, data: anoMeses.map(ym => frotaByMonth[ym][f]) }))
-  };
+  console.log(`[buildP1] Frota ranges (% mês): totais ${anoMeses.map(ym => `${ym}=${monthTotal[ym]}`).filter(s => !s.endsWith('=0')).join(' ')}`);
+
+  const g2 = { tipo: 'tabela-ranges', meses: mesesMeta, rows: g2Rows };
 
   // --- Gráfico 3: Custo/MQL rolling 7d ---
   const g3Labels = [];

@@ -384,23 +384,28 @@ function renderVolumeChart(g1) {
 function renderFrotaChart(g2) {
   const wrap = document.getElementById('chart-frota-wrap');
   wrap.className = 'skeleton-chart loaded';
-  wrap.innerHTML = '<div class="chart-card"><canvas id="chart-frota"></canvas></div>';
-  const ctx = document.getElementById('chart-frota').getContext('2d');
-  // Eixo X = meses; barras empilhadas por faixa. Cor: claro=frota pequena → escuro/quente=grande, cinza=não informado
-  const FROTA_COLORS = ['#bee3f8','#90cdf4','#63b3ed','#4299e1','#3182ce','#48bb78','#38a169','#2f855a','#ed8936','#dd6b20','#718096'];
-  const datasets = (g2.series || []).map((s, i) => ({
-    label: s.label,
-    data: s.data,
-    backgroundColor: FROTA_COLORS[i % FROTA_COLORS.length]
-  }));
-  new Chart(ctx, {
-    type: 'bar',
-    data: { labels: g2.labels, datasets },
-    options: mergeDeep(CHART_DEFAULTS, {
-      plugins: { legend: { labels: { color: '#a0aec0' } } },
-      scales: { x: { stacked: true }, y: { stacked: true } }
-    })
-  });
+  if (!g2 || !g2.rows) { wrap.innerHTML = '<div class="chart-card">Sem dados</div>'; return; }
+  // Tabela: linhas = ranges, colunas = meses + Média. Cor só na Média (tendência último mês vs anterior).
+  const COR = { laranja: 'rgba(246,173,85,0.9)', verde: 'rgba(72,187,120,0.9)', vermelho: 'rgba(252,129,129,0.9)' };
+  const th = ['Range'].concat(g2.meses.map(m => m.parcial ? m.label : m.label)).concat(['Média'])
+    .map((h, i) => `<th style="padding:6px 8px;text-align:${i===0?'left':'center'};color:#a0aec0;font-size:0.72rem;white-space:nowrap;border-bottom:1px solid #2d3748">${h}</th>`).join('');
+  const trs = g2.rows.map(r => {
+    const cells = r.pcts.map(v => `<td style="padding:6px 8px;text-align:center;color:#cbd5e0">${v===null?'<span style="color:#4a5568">—</span>':v+'%'}</td>`).join('');
+    const mediaStyle = r.cor
+      ? `background:${COR[r.cor]};color:#1a202c;font-weight:700;border-radius:4px`
+      : 'color:#e2e8f0;font-weight:700';
+    const mediaCell = `<td style="padding:6px 8px;text-align:center;${mediaStyle}">${r.media===null?'—':r.media+'%'}</td>`;
+    return `<tr style="border-bottom:1px solid #1a202c"><td style="padding:6px 8px;text-align:left;color:#e2e8f0;font-weight:600;white-space:nowrap">${r.range}</td>${cells}${mediaCell}</tr>`;
+  }).join('');
+  wrap.innerHTML = `<div class="chart-card" style="overflow-x:auto">
+    <table style="width:100%;border-collapse:collapse;font-size:0.8rem"><thead><tr>${th}</tr></thead><tbody>${trs}</tbody></table>
+    <div style="margin-top:10px;font-size:0.7rem;color:#718096;line-height:1.5">
+      Cor na <b>Média</b> = tendência (último mês com dados vs anterior).
+      Frota pequena (Micro/Pequeno): 🟠 subindo = ruim · 🟢 caindo = bom.
+      Frota grande (Médio/Grande/Enterprise): 🟢 subindo = bom · 🔴 caindo = ruim.
+      % = participação do range no total de leads do mês (inclui "Não informado").
+    </div>
+  </div>`;
 }
 
 function renderCostMQLChart(g3) {
