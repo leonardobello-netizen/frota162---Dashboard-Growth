@@ -183,10 +183,10 @@
         <table id="cohort-table">
           <thead>
             <tr>
-              <th>Mês</th><th>MQL</th><th>Reunião</th><th>Ganho</th>
-              <th>MRR (R$)</th><th>Receita Google (R$)</th><th>Spend (R$)</th><th>ROAS</th>
+              <th>Mês (safra)</th><th>MQL</th><th>Reunião</th><th>Ganho</th>
+              <th>MRR (R$)</th><th>Spend (R$)</th><th>ROAS</th>
               <th>CAC (R$)</th><th>LTV (R$)</th><th>LTV/CAC</th>
-              <th>Ticket Médio (R$)</th><th>Payback (m)</th>
+              <th>Ticket Médio (R$)</th><th>Payback</th>
             </tr>
           </thead>
           <tbody id="cohort-body">
@@ -627,7 +627,9 @@ function renderEfficiencyChart(g12) {
     data: {
       labels: g12.labels,
       datasets: [
-        { type: 'bar', label: 'ROAS', data: g12.roas, backgroundColor: 'rgba(99,179,237,0.6)', yAxisID: 'yRoas' },
+        { type: 'bar', label: 'LTV (R$)', data: g12.ltvBase, backgroundColor: 'rgba(99,179,237,0.8)', yAxisID: 'yLtv', stack: 'ltv' },
+        { type: 'bar', label: 'Falta p/ Expected LTV', data: g12.gap, backgroundColor: 'rgba(246,173,85,0.6)', yAxisID: 'yLtv', stack: 'ltv' },
+        { type: 'bar', label: 'Acima do Expected LTV', data: g12.excedente, backgroundColor: 'rgba(72,187,120,0.7)', yAxisID: 'yLtv', stack: 'ltv' },
         { type: 'line', label: 'CAC (R$)', data: g12.cac, borderColor: '#fc8181', backgroundColor: 'transparent', borderWidth: 2, pointRadius: 4, tension: 0.3, spanGaps: true, yAxisID: 'yCac' }
       ]
     },
@@ -636,8 +638,8 @@ function renderEfficiencyChart(g12) {
       maintainAspectRatio: true,
       plugins: { legend: { labels: { color: '#a0aec0', font: { size: 11 } } } },
       scales: {
-        x: { ticks: { color: '#718096', font: { size: 10 } }, grid: { color: '#2d3748' } },
-        yRoas: { position: 'left', ticks: { color: '#63b3ed', font: { size: 10 } }, grid: { color: '#2d3748' }, title: { display: true, text: 'ROAS', color: '#63b3ed' } },
+        x: { stacked: true, ticks: { color: '#718096', font: { size: 10 } }, grid: { color: '#2d3748' } },
+        yLtv: { stacked: true, position: 'left', ticks: { color: '#63b3ed', font: { size: 10 }, callback: v => 'R$' + Math.round(v).toLocaleString('pt-BR') }, grid: { color: '#2d3748' }, title: { display: true, text: 'LTV (R$)', color: '#63b3ed' } },
         yCac: { position: 'right', ticks: { color: '#fc8181', font: { size: 10 }, callback: v => 'R$' + Math.round(v).toLocaleString('pt-BR') }, grid: { drawOnChartArea: false }, title: { display: true, text: 'CAC (R$)', color: '#fc8181' } }
       }
     }
@@ -646,13 +648,14 @@ function renderEfficiencyChart(g12) {
 
 function renderCohortTable(rows) {
   const tbody = document.getElementById('cohort-body');
-  const expected = (rows.length && rows[0].expected) ? rows[0].expected : {};
 
+  // val real + expected por linha (cada safra tem seu próprio expected)
   function cellWithExp(val, expVal, format) {
     const main = (val !== null && val !== undefined) ? fmt(val, format) : '—';
     const exp = (expVal !== null && expVal !== undefined) ? `<div style="font-size:0.7rem;color:#718096">(exp: ${fmt(expVal, format)})</div>` : '';
     return main + exp;
   }
+  const expNum = (v) => (v !== null && v !== undefined) ? `<div style="font-size:0.7rem;color:#718096">(exp: ${v})</div>` : '';
 
   tbody.innerHTML = rows.map(r => {
     let cacClass = '';
@@ -665,16 +668,15 @@ function renderCohortTable(rows) {
       <td>${r.mes}</td>
       <td>${r.mql ?? '—'}</td>
       <td>${r.reuniao ?? '—'}</td>
-      <td>${r.ganho ?? '—'}</td>
-      <td>${cellWithExp(r.mrr != null ? r.mrr : null, expected.mrr, 'currency')}</td>
-      <td>${r.receitaGoogle != null ? fmt(r.receitaGoogle, 'currency') : '—'}</td>
+      <td>${(r.ganho ?? '—')}${expNum(r.expGanho)}</td>
+      <td>${cellWithExp(r.mrr != null ? r.mrr : null, r.expMrr, 'currency')}</td>
       <td>${r.spend != null ? fmt(r.spend, 'currency') : '—'}</td>
-      <td>${cellWithExp(r.roas, expected.roas, 'dec')}</td>
-      <td class="${cacClass}">${cellWithExp(r.cac, expected.cac, 'currency')}</td>
-      <td>${cellWithExp(r.ltv || null, expected.ltv, 'currency')}</td>
-      <td>${cellWithExp(r.ltvCac, expected.ltvCac, 'dec')}</td>
-      <td>${cellWithExp(r.ticketMedio || null, expected.ticketMedio, 'currency')}</td>
-      <td>${r.payback !== null ? r.payback + 'm' + (expected.payback !== null && expected.payback !== undefined ? `<div style="font-size:0.7rem;color:#718096">(exp: ${expected.payback}m)</div>` : '') : '—'}</td>
+      <td>${cellWithExp(r.roas, r.expRoas, 'dec')}</td>
+      <td class="${cacClass}">${cellWithExp(r.cac, r.expCac, 'currency')}</td>
+      <td>${cellWithExp(r.ltv || null, r.expLtv, 'currency')}</td>
+      <td>${cellWithExp(r.ltvCac, r.expLtvCac, 'dec')}</td>
+      <td>${cellWithExp(r.ticketMedio || null, r.expTicket, 'currency')}</td>
+      <td>${r.payback !== null ? r.payback + 'm' + expNum(r.expPayback !== null && r.expPayback !== undefined ? r.expPayback + 'm' : null) : '—'}</td>
     </tr>`;
   }).join('');
 }

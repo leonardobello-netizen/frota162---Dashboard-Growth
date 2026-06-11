@@ -783,134 +783,101 @@ async function buildP2() {
   const [ty, tm, td] = toYMD(today).split('-').map(Number); // partes em Brasília
   const d24mAgo = brMidnight(ty, tm - 1 - 24, td); // Date.UTC normaliza mês negativo
 
-  // ── 3 queries em PARALELO ─────────────────────────────────────
-  console.log('[buildP2] Iniciando 3 queries em paralelo...');
-  const [wonDeals, wonDealsGoogle, pvDeals, googleCampaigns] = await Promise.all([
-    // 1. Deals GANHOS — TODAS as origens, 6 pipelines de receita (MRR/Ganho do cohort = bate com relatório "Total MRR")
+  // ── Cohort por SAFRA (data de criação) — 2 queries em PARALELO ──────────────
+  console.log('[buildP2] Iniciando queries do cohort (safra por createdate)...');
+  const [googleDeals, googleCampaigns] = await Promise.all([
+    // Deals GOOGLE criados nos últimos 24m (QUALQUER pipeline) — atribuição por SAFRA = mês de createdate.
+    // Um deal criado no Pré-Vendas no mês X e ganho no Sales depois conta na safra X (a createdate é preservada).
     hsSearchAll('deals', {
       filterGroups: [{ filters: [
-        { propertyName: 'hs_is_closed_won', operator: 'EQ', value: 'true' },
-        { propertyName: 'pipeline',   operator: 'IN',  values: MRR_PIPELINES },
-        { propertyName: 'closedate',  operator: 'GTE', value: String(d24mAgo.getTime()) },
-        { propertyName: 'closedate',  operator: 'LTE', value: String(today.getTime()) }
-      ]}],
-      properties: ['closedate', 'amount_in_home_currency', 'dealname'],
-      limit: 100
-    }),
-    // 1b. Deals GANHOS atribuídos ao GOOGLE ADS (Opção B) — base de ROAS/CAC/LTV/Ticket/Payback
-    hsSearchAll('deals', {
-      filterGroups: [{ filters: [
-        { propertyName: 'hs_is_closed_won', operator: 'EQ', value: 'true' },
-        { propertyName: 'sub_origem', operator: 'EQ',  value: SUB_ORIGEM_GOOGLE },
-        { propertyName: 'pipeline',   operator: 'IN',  values: MRR_PIPELINES },
-        { propertyName: 'closedate',  operator: 'GTE', value: String(d24mAgo.getTime()) },
-        { propertyName: 'closedate',  operator: 'LTE', value: String(today.getTime()) }
-      ]}],
-      properties: ['closedate', 'amount_in_home_currency', 'dealname'],
-      limit: 100
-    }),
-    // 2. Deals Pré-Vendas Google Ads (24m)
-    hsSearchAll('deals', {
-      filterGroups: [{ filters: [
-        { propertyName: 'pipeline',   operator: 'EQ',  value: PIPELINE_PRE_VENDAS },
         { propertyName: 'sub_origem', operator: 'EQ',  value: SUB_ORIGEM_GOOGLE },
         { propertyName: 'createdate', operator: 'GTE', value: String(d24mAgo.getTime()) },
         { propertyName: 'createdate', operator: 'LTE', value: String(today.getTime()) }
       ]}],
-      properties: ['createdate', 'dealstage', 'amount'],
-      limit: 100
+      properties: ['createdate', 'dealstage', 'pipeline', 'hs_is_closed_won', 'amount_in_home_currency']
     }),
-    // 3. Spend Metabase (24m)
+    // Spend Metabase (24m)
     loadGoogleCampaignsFromMetabase(d24mAgo, today)
   ]);
-  console.log(`[buildP2] ✅ Paralelo concluído — wonDeals:${wonDeals.length} pvDeals:${pvDeals.length} googleRows:${googleCampaigns.length}`);
-  const spendByMonth = {};
+  console.log(`[buildP2] ✅ Concluído — googleDeals:${googleDeals.length} googleRows:${googleCampaigns.length}`);
   const yesterdayStr = toYMD(today);
+  const spendByMonth = {};
   googleCampaigns.forEach(row => {
     const dt = typeof row.date === 'string' ? row.date.split('T')[0] : toYMD(row.date);
-    if (!dt || dt > yesterdayStr) return; // Filter to D-1
-    const ym = dt.slice(0, 7);
-    spendByMonth[ym] = (spendByMonth[ym] || 0) + row.cost_brl;
+    if (!dt || dt > yesterdayStr) return; // D-1
+    spendByMonth[dt.slice(0, 7)] = (spendByMonth[dt.slice(0, 7)] || 0) + row.cost_brl;
   });
 
-  // MQL by month (deals entering pré-vendas)
-  const mqlByMonth = {};
-  pvDeals.forEach(d => {
-    const ym = toYMD(new Date(new Date(d.properties.createdate).getTime())).slice(0, 7);
-    mqlByMonth[ym] = (mqlByMonth[ym] || 0) + 1;
+  // Buckets por SAFRA (mês de createdate do deal Google)
+  const mqlByMonth = {}, reuniaoByMonth = {}, ganhoByMonth = {}, mrrByMonth = {};
+  googleDeals.forEach(d => {
+    const ym = toYMD(new Date(d.properties.createdate)).slice(0, 7);
+    mqlByMonth[ym] = (mqlByMonth[ym] || 0) + 1; // MQL = todos os deals Google criados na safra
+    if (d.properties.dealstage === STAGE_REUNIAO) reuniaoByMonth[ym] = (reuniaoByMonth[ym] || 0) + 1;
+    const won = d.properties.hs_is_closed_won === 'true' || d.properties.hs_is_closed_won === true;
+    if (won && MRR_PIPELINES.includes(d.properties.pipeline)) { // ganho de RECEITA (exclui POCs/Onboarding)
+      ganhoByMonth[ym] = (ganhoByMonth[ym] || 0) + 1;
+      mrrByMonth[ym] = (mrrByMonth[ym] || 0) + parseFloat(d.properties.amount_in_home_currency || 0);
+    }
   });
 
-  // Reunião by month (pré-vendas stage)
-  const reuniaoByMonth = {};
-  pvDeals.filter(d => d.properties.dealstage === STAGE_REUNIAO).forEach(d => {
-    const ym = toYMD(new Date(new Date(d.properties.createdate).getTime())).slice(0, 7);
-    reuniaoByMonth[ym] = (reuniaoByMonth[ym] || 0) + 1;
+  const r2 = x => Math.round(x * 100) / 100;
+  const r1 = x => Math.round(x * 10) / 10;
+
+  // 24 meses em ordem cronológica (antigo → recente)
+  const months = [];
+  for (let i = 23; i >= 0; i--) months.push(toYMD(brMidnight(ty, tm - 1 - i, 1)).slice(0, 7));
+  const base = months.map(ym => ({
+    ym, mql: mqlByMonth[ym] || 0, reuniao: reuniaoByMonth[ym] || 0,
+    ganho: ganhoByMonth[ym] || 0, mrr: r2(mrrByMonth[ym] || 0), spend: r2(spendByMonth[ym] || 0)
+  }));
+
+  // Cada linha: reais + Expected (baseline = média das safras n-2, n-3, n-4)
+  const rows = base.map((b, i) => {
+    const spend = b.spend;
+    const roas = spend ? r2(b.mrr / spend) : null;
+    const cac = b.ganho ? r2(spend / b.ganho) : null;
+    const ltv = r2(b.mrr * 8);
+    const ltvCac = (cac && ltv) ? r1(ltv / cac) : null;
+    const ticketMedio = b.ganho ? r2(b.mrr / b.ganho) : null;
+    const payback = roas ? r1(1 / roas) : null;
+    // Expected: usa as 3 safras maduras n-2, n-3, n-4 (pula a atual e a anterior)
+    let expGanho = null, expMrr = null;
+    const baseIdx = [i - 2, i - 3, i - 4].filter(j => j >= 0);
+    if (baseIdx.length === 3) {
+      const convs = baseIdx.filter(j => base[j].mql > 0).map(j => base[j].ganho / base[j].mql);
+      const tickets = baseIdx.filter(j => base[j].ganho > 0).map(j => base[j].mrr / base[j].ganho);
+      if (convs.length) {
+        expGanho = r2((convs.reduce((a, c) => a + c, 0) / convs.length) * b.mql);
+        if (tickets.length) expMrr = r2(expGanho * (tickets.reduce((a, c) => a + c, 0) / tickets.length));
+      }
+    }
+    const expRoas = (spend && expMrr !== null) ? r2(expMrr / spend) : null;
+    const expCac = expGanho ? r2(spend / expGanho) : null;
+    const expLtv = (expMrr !== null) ? r2(expMrr * 8) : null;
+    const expLtvCac = (expCac && expLtv !== null) ? r1(expLtv / expCac) : null;
+    const expTicket = expGanho ? r2(expMrr / expGanho) : null;
+    const expPayback = expRoas ? r1(1 / expRoas) : null;
+    return {
+      mes: b.ym, mql: b.mql, reuniao: b.reuniao, ganho: b.ganho, mrr: b.mrr, spend,
+      roas, cac, ltv, ltvCac, ticketMedio, payback,
+      expGanho, expMrr, expRoas, expCac, expLtv, expLtvCac, expTicket, expPayback
+    };
   });
 
-  // Won deals by close month — TOTAL (todas origens) → MRR/Ganho exibidos (batem c/ relatório)
-  const wonByMonth = {};
-  wonDeals.forEach(d => {
-    const ym = toYMD(new Date(new Date(d.properties.closedate).getTime())).slice(0, 7);
-    if (!wonByMonth[ym]) wonByMonth[ym] = { count: 0, mrr: 0 };
-    wonByMonth[ym].count++;
-    wonByMonth[ym].mrr += parseFloat(d.properties.amount_in_home_currency || 0);
-  });
-  // Won deals GOOGLE por close month → base de ROAS/CAC/LTV/Ticket/Payback (eficiência de aquisição Google)
-  const wonGoogleByMonth = {};
-  wonDealsGoogle.forEach(d => {
-    const ym = toYMD(new Date(new Date(d.properties.closedate).getTime())).slice(0, 7);
-    if (!wonGoogleByMonth[ym]) wonGoogleByMonth[ym] = { count: 0, mrr: 0 };
-    wonGoogleByMonth[ym].count++;
-    wonGoogleByMonth[ym].mrr += parseFloat(d.properties.amount_in_home_currency || 0);
-  });
-
-  // Build cohort rows
-  const rows = [];
-  for (let i = 23; i >= 0; i--) {
-    const ym = toYMD(brMidnight(ty, tm - 1 - i, 1)).slice(0, 7); // mês i atrás (Brasília)
-    const mql = mqlByMonth[ym] || 0;
-    const reuniao = reuniaoByMonth[ym] || 0;
-    // MRR/Ganho = TOTAL (todas origens) — batem com o relatório "Total MRR"
-    const ganho = wonByMonth[ym] ? wonByMonth[ym].count : 0;
-    const mrr = wonByMonth[ym] ? wonByMonth[ym].mrr : 0;
-    // Base GOOGLE para eficiência (Opção B): ROAS/CAC/LTV/Ticket/Payback usam receita e ganhos do Google
-    const ganhoGoogle = wonGoogleByMonth[ym] ? wonGoogleByMonth[ym].count : 0;
-    const receitaGoogle = wonGoogleByMonth[ym] ? wonGoogleByMonth[ym].mrr : 0;
-    const spend = Math.round((spendByMonth[ym] || 0) * 100) / 100;
-    const ltv = receitaGoogle * 8;
-    const roas = spend ? Math.round((receitaGoogle / spend) * 100) / 100 : null;
-    const cac = ganhoGoogle ? Math.round(spend / ganhoGoogle * 100) / 100 : null;
-    const ticketMedio = ganhoGoogle ? Math.round(receitaGoogle / ganhoGoogle * 100) / 100 : null;
-    const payback = cac && ticketMedio ? Math.round(cac / ticketMedio * 10) / 10 : null;
-    const ltvCac = cac && ltv ? Math.round(ltv / cac * 10) / 10 : null;
-
-    rows.push({ mes: ym, mql, reuniao, ganho, mrr: Math.round(mrr * 100) / 100, receitaGoogle: Math.round(receitaGoogle * 100) / 100, spend, roas, cac, ltv: Math.round(ltv * 100) / 100, ltvCac, ticketMedio, payback });
-  }
-
-  // Calcula Expected = média dos últimos 6 meses para cada métrica
-  const last6 = rows.slice(-6).filter(r => r.mql > 0);
-  function avg6(field) {
-    const vals = last6.map(r => r[field]).filter(v => v !== null && v !== undefined && v > 0);
-    if (!vals.length) return null;
-    return Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 100) / 100;
-  }
-  const expected = {
-    roas:        avg6('roas'),
-    cac:         avg6('cac'),
-    ltv:         avg6('ltv'),
-    ltvCac:      avg6('ltvCac'),
-    mrr:         avg6('mrr'),
-    payback:     avg6('payback'),
-    ticketMedio: avg6('ticketMedio')
+  // Gráfico (últimos 12 meses): barras empilhadas LTV vs Expected LTV + linha CAC.
+  // base = min(LTV, ExpLTV); gap = falta p/ Expected (LTV<Exp); excedente = superou (LTV>Exp).
+  const g = rows.slice(-12);
+  const g12 = {
+    labels:    g.map(r => r.mes),
+    ltvBase:   g.map(r => r.expLtv !== null ? Math.min(r.ltv, r.expLtv) : r.ltv),
+    gap:       g.map(r => r.expLtv !== null ? Math.max(0, r2(r.expLtv - r.ltv)) : 0),
+    excedente: g.map(r => r.expLtv !== null ? Math.max(0, r2(r.ltv - r.expLtv)) : 0),
+    cac:       g.map(r => r.cac),
+    expLtv:    g.map(r => r.expLtv)
   };
 
-  // Adiciona expected a cada row como campo separado
-  rows.forEach(r => { r.expected = expected; });
-
-  // Gráfico: últimos 12 meses
-  const g12 = rows.slice(-12);
-
-  return { cohort: rows, g12: { labels: g12.map(r => r.mes), roas: g12.map(r => r.roas), cac: g12.map(r => r.cac) }, expected };
+  return { cohort: rows, g12 };
 }
 
 // ── Memory cache para endpoints separados ──────────────────────
