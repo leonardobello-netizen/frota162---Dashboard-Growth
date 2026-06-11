@@ -602,14 +602,9 @@ async function buildP1() {
   const g1Leads = anoMeses.map(ym => ym > currentYM ? null : (leadsMensal[ym] || 0));
   const g1MQL = anoMeses.map(ym => ym > currentYM ? null : (mqlMensal[ym] || 0));
 
-  // Média móvel de 3 MESES (tendência) — null nos meses futuros
-  const mm3 = (arr) => arr.map((v, i) => {
-    if (v === null) return null;
-    const slice = arr.slice(Math.max(0, i - 2), i + 1).filter(x => x !== null);
-    return Math.round((slice.reduce((a, b) => a + b, 0) / slice.length) * 10) / 10;
-  });
-  const g1MM7Leads = mm3(g1Leads);
-  const g1MM7MQL = mm3(g1MQL);
+  // Média móvel de 1 MÊS — a linha acompanha o valor de cada mês (trajetória); null nos meses futuros
+  const g1MM7Leads = g1Leads.slice();
+  const g1MM7MQL = g1MQL.slice();
   console.log(`[buildP1] Volume mensal: leads=${JSON.stringify(g1Leads)} mql=${JSON.stringify(g1MQL)}`);
 
   // --- Gráfico 2: Qualidade frota ---
