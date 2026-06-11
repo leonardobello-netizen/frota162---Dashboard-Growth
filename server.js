@@ -723,7 +723,8 @@ async function buildP1() {
     },
     g2,
     g3: { labels: g3Labels, costMQL: g3CostMQL },
-    campTable
+    campTable,
+    dataAtualizacao: toYMD(today) // D-1: última data fechada dos dados apresentados
   };
     console.log(`[buildP1] g1 keys being returned:`, Object.keys(result.g1));
     console.log(`[buildP1] Full g1 structure:`, JSON.stringify({
@@ -1191,28 +1192,51 @@ app.get('/api/p1/campaigns-enriched', async (req, res) => {
   }
 });
 
-// Força rebuild do cache (usado pelo agente diário)
-app.post('/api/force-refresh', async (req, res) => {
-  console.log('[force-refresh] iniciando rebuild do cache...');
+// Reconstrói P1+P2 e limpa todos os caches derivados (usado pelo force-refresh e pelo cron diário das 9h)
+async function rebuildAllCaches(reason) {
+  console.log(`[rebuild] (${reason}) iniciando rebuild do cache...`);
   delete MEM_CACHE['p1'];
   delete MEM_CACHE['p2'];
-  // Limpa também o memCache dos endpoints separados (cost-mql-monthly e campaigns-enriched)
   memCache.g3Monthly = null;
   memCache.g3ts = 0;
   Object.keys(memCache).filter(k => k.startsWith('campaigns_') || k.startsWith('campts_')).forEach(k => { memCache[k] = null; });
+  const [p1, p2] = await Promise.all([buildP1(), buildP2()]);
+  MEM_CACHE['p1'] = { ts: Date.now(), data: p1 };
+  MEM_CACHE['p2'] = { ts: Date.now(), data: p2 };
+  writeDiskCache('p1', p1);
+  writeDiskCache('p2', p2);
+  console.log(`[rebuild] (${reason}) ✅ cache rebuilt com sucesso`);
+}
+
+// Força rebuild do cache (usado pelo agente diário)
+app.post('/api/force-refresh', async (req, res) => {
   try {
-    const [p1, p2] = await Promise.all([buildP1(), buildP2()]);
-    MEM_CACHE['p1'] = { ts: Date.now(), data: p1 };
-    MEM_CACHE['p2'] = { ts: Date.now(), data: p2 };
-    writeDiskCache('p1', p1);
-    writeDiskCache('p2', p2);
-    console.log('[force-refresh] cache rebuilt com sucesso');
+    await rebuildAllCaches('force-refresh');
     res.json({ ok: true, ts: Date.now() });
   } catch (e) {
     console.error('[force-refresh] erro:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
+
+// ── Atualização automática diária (9h Brasília) ───────────────────────────
+// Roda no PRÓPRIO servidor (Railway): todo dia, a partir das 9h BRT, fecha o
+// D-1 reconstruindo P1+P2 — sem depender de comando externo ou app aberto.
+// Também cobre restart/deploy após as 9h (primeiro tick reconstrói o dia).
+let lastAutoRefreshDay = null;
+setInterval(async () => {
+  try {
+    const br = new Date(Date.now() - BR_OFFSET_MS); // relógio de Brasília
+    const day = br.toISOString().slice(0, 10);
+    if (br.getUTCHours() >= 9 && lastAutoRefreshDay !== day) {
+      lastAutoRefreshDay = day; // marca antes para evitar rebuilds concorrentes
+      await rebuildAllCaches(`auto-9h ${day}`);
+    }
+  } catch (e) {
+    lastAutoRefreshDay = null; // falhou → tenta de novo no próximo tick
+    console.error('[auto-refresh-9h] erro:', e.message);
+  }
+}, 5 * 60 * 1000); // checa a cada 5 minutos
 
 app.listen(PORT, () => {
   console.log(`Frota 162 Dash v2 rodando em http://localhost:${PORT}`);

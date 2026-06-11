@@ -66,7 +66,7 @@
   .refresh-icon { display: inline-block; }
   .refresh-icon.spinning { animation: spin 1s linear infinite; }
   @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-  .last-update { font-size: 0.75rem; color: #718096; }
+  .last-update { font-size: 0.85rem; color: #a0aec0; }
 
   /* ── Skeleton ──────────────────────────────────────────────── */
   @keyframes shimmer {
@@ -280,6 +280,7 @@ async function loadP1() {
 
     if (!data) throw new Error('Dados não disponíveis após ' + MAX_ATTEMPTS + ' tentativas.');
     console.log('[DEBUG] /api/p1 carregado:', Object.keys(data));
+    window._dataAtualizacao = data.dataAtualizacao || null; // D-1 dos dados (exibido no header)
 
     // 1. KPIs — imediato
     console.log('[DEBUG] Renderizando KPIs...');
@@ -670,9 +671,15 @@ function renderCohortTable(rows) {
 
 // ── Refresh ──────────────────────────────────────────────────
 function updateLastUpdate() {
-  const now = new Date();
-  const time = now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-  document.getElementById('last-update').textContent = `Atualizado ${time}`;
+  const el = document.getElementById('last-update');
+  if (window._dataAtualizacao) {
+    // Data de atualização = D-1, a última data fechada dos dados apresentados
+    const [y, m, d] = window._dataAtualizacao.split('-');
+    el.textContent = `Data de atualização: ${d}/${m}/${y}`;
+  } else {
+    const now = new Date();
+    el.textContent = `Atualizado ${now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`;
+  }
 }
 
 async function refreshDashboard() {
