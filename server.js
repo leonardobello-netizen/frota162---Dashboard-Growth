@@ -1175,6 +1175,15 @@ app.get('/api/debug/metabase', async (req, res) => {
       "SELECT date_trunc('month', date) as mes, SUM(cost_brl) as spend FROM data_analytics.google_campaigns WHERE YEAR(date) = 2026 GROUP BY 1 ORDER BY 1"
     ).catch(e => ({ error: e.message }));
 
+    // Diagnóstico p/ Ad Group / Keyword: colunas da tabela e tabelas do schema
+    results.colunas = await metabaseQuery(
+      "SELECT column_name FROM information_schema.columns WHERE table_schema = 'data_analytics' AND table_name = 'google_campaigns' ORDER BY column_name"
+    ).catch(e => ({ error: e.message }));
+
+    results.tabelas = await metabaseQuery(
+      "SELECT table_name FROM information_schema.tables WHERE table_schema = 'data_analytics' ORDER BY table_name"
+    ).catch(e => ({ error: e.message }));
+
   } catch (e) {
     results.fatalError = e.message;
   }
