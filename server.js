@@ -1184,6 +1184,10 @@ app.get('/api/debug/metabase', async (req, res) => {
       "SELECT table_name FROM information_schema.tables WHERE table_schema = 'data_analytics' ORDER BY table_name"
     ).catch(e => ({ error: e.message }));
 
+    results.colunasKw = await metabaseQuery(
+      "SELECT column_name FROM information_schema.columns WHERE table_schema = 'data_analytics' AND table_name = 'google_keywords' ORDER BY column_name"
+    ).catch(e => ({ error: e.message }));
+
   } catch (e) {
     results.fatalError = e.message;
   }
