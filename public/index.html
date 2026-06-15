@@ -499,6 +499,8 @@ let _campCurrentGroup = 'campaign';
 
 // Dados de campanha-level vêm do P1 (cache 24h); adgroup/keyword vêm do endpoint separado
 let _p1CampData = null; // cache local da view "campaign" que vem do P1
+let _kwAllRows = [];    // todas as keywords carregadas (base do filtro suspenso)
+let _kwFilter = '';     // keyword selecionada no filtro ('' = todas)
 
 function renderCampTable(rows, groupBy) {
   const wrap = document.getElementById('camp-table-wrap');
@@ -523,17 +525,37 @@ function renderCampTable(rows, groupBy) {
     <td>${r.ctr != null ? r.ctr.toFixed(2) + '%' : '—'}</td>
   </tr>`).join('') : `<tr><td colspan="7" style="padding:20px;color:#718096">Sem dados disponíveis.</td></tr>`;
 
+  // Filtro suspenso (só na visão Keyword) — lista as palavras únicas carregadas
+  let kwFilterHtml = '';
+  if (groupBy === 'keyword') {
+    const nomes = [...new Set(_kwAllRows.map(r => r.name).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+    const opts = [`<option value="">Todas as keywords (${nomes.length})</option>`]
+      .concat(nomes.map(n => {
+        const v = n.replace(/"/g, '&quot;');
+        return `<option value="${v}" ${n === _kwFilter ? 'selected' : ''}>${n}</option>`;
+      })).join('');
+    kwFilterHtml = `<select onchange="filterKeyword(this.value)" style="margin-left:12px;background:#1a202c;color:#e2e8f0;border:1px solid #2d3748;border-radius:6px;padding:5px 8px;font-size:0.8rem;max-width:300px">${opts}</select>`;
+  }
+
   wrap.className = 'table-card';
   wrap.innerHTML = `
-    <div class="table-header">
+    <div class="table-header" style="flex-wrap:wrap;gap:8px">
       <span style="font-size:0.85rem;font-weight:600">Google Ads — últimos 30 dias</span>
       <div style="display:flex;gap:6px;margin-left:16px">
         <button onclick="loadCampTable('campaign')" class="toggle-btn ${'campaign'===groupBy?'active':''}">Campanha</button>
         <button onclick="loadCampTable('adgroup')"  class="toggle-btn ${'adgroup' ===groupBy?'active':''}">Ad Group</button>
         <button onclick="loadCampTable('keyword')"  class="toggle-btn ${'keyword' ===groupBy?'active':''}">Keyword</button>
       </div>
+      ${kwFilterHtml}
     </div>
     <div style="overflow-x:auto"><table><thead>${thead}</thead><tbody>${tbody}</tbody></table></div>`;
+}
+
+// Filtra a tabela de keywords pela palavra selecionada ('' = todas)
+function filterKeyword(kw) {
+  _kwFilter = kw;
+  const disp = kw ? _kwAllRows.filter(r => r.name === kw) : _kwAllRows;
+  renderCampTable(disp, 'keyword');
 }
 
 async function loadCampTable(groupBy) {
@@ -564,7 +586,13 @@ async function loadCampTable(groupBy) {
     const res  = await fetch('/api/p1/campaigns-enriched?groupBy=' + groupBy);
     const data = await res.json();
     if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
-    renderCampTable(data.campaigns || [], groupBy);
+    if (groupBy === 'keyword') {
+      _kwAllRows = data.campaigns || []; // base do filtro suspenso
+      _kwFilter = '';                    // começa mostrando todas
+      renderCampTable(_kwAllRows, 'keyword');
+    } else {
+      renderCampTable(data.campaigns || [], groupBy);
+    }
   } catch (e) {
     console.error('[loadCampTable] erro:', e);
     wrap.innerHTML = `
