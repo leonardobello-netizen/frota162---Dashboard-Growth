@@ -958,30 +958,34 @@ async function buildCampaignsEnriched(groupBy = 'campaign') {
     console.log(`[buildCampaignsEnriched] cache HIT: ${groupBy}`);
     return memCache[cacheKey];
   }
-  // Mapeia groupBy para coluna real na tabela (nomes padrão Google Ads export)
-  const GROUP_COL = {
-    campaign: 'campaign_name',
-    adgroup:  'ad_group_name',
-    keyword:  'keyword_text'
-  };
-  const col = GROUP_COL[groupBy] || 'campaign_name';
-
-  // Para adgroup e keyword inclui campaign_name como coluna extra (contexto)
-  const extraColSelect = groupBy !== 'campaign' ? `, campaign_name` : '';
-  const extraColGroup  = groupBy !== 'campaign' ? `, campaign_name` : '';
-
-  // Usa date_add nativo do Athena para evitar problemas de tipo com TIMESTAMP vs DATE
-  const sql = `
-    SELECT
-      ${col}${extraColSelect},
-      SUM(cost_brl)    AS spend,
-      SUM(conversions) AS conversions,
-      SUM(clicks)      AS clicks
-    FROM data_analytics.google_campaigns
-    WHERE date >= date_add('day', -30, current_date)
-    GROUP BY ${col}${extraColGroup}
-    ORDER BY spend DESC
-  `;
+  // Campanha vem de google_campaigns (tem coluna `date` → últimos 30 dias).
+  // Ad Group / Keyword vêm de google_keywords (colunas `ad_group` e `keyword`; sem `date`,
+  // usa o snapshot mais recente via extracted_at).
+  let sql;
+  if (groupBy === 'campaign') {
+    sql = `
+      SELECT campaign_name,
+             SUM(cost_brl)    AS spend,
+             SUM(conversions) AS conversions,
+             SUM(clicks)      AS clicks
+      FROM data_analytics.google_campaigns
+      WHERE date >= date_add('day', -30, current_date)
+      GROUP BY campaign_name
+      ORDER BY spend DESC
+    `;
+  } else {
+    const col = groupBy === 'adgroup' ? 'ad_group' : 'keyword';
+    sql = `
+      SELECT ${col}, campaign_name,
+             SUM(cost_brl)    AS spend,
+             SUM(conversions) AS conversions,
+             SUM(clicks)      AS clicks
+      FROM data_analytics.google_keywords
+      WHERE extracted_at = (SELECT MAX(extracted_at) FROM data_analytics.google_keywords)
+      GROUP BY ${col}, campaign_name
+      ORDER BY spend DESC
+    `;
+  }
 
   console.log(`[buildCampaignsEnriched] Executando query (${groupBy}):`, sql.trim().split('\n')[3]);
 
@@ -1186,6 +1190,10 @@ app.get('/api/debug/metabase', async (req, res) => {
 
     results.colunasKw = await metabaseQuery(
       "SELECT column_name FROM information_schema.columns WHERE table_schema = 'data_analytics' AND table_name = 'google_keywords' ORDER BY column_name"
+    ).catch(e => ({ error: e.message }));
+
+    results.kwExtracted = await metabaseQuery(
+      "SELECT extracted_at, COUNT(*) AS n, SUM(cost_brl) AS spend FROM data_analytics.google_keywords GROUP BY extracted_at ORDER BY extracted_at DESC LIMIT 6"
     ).catch(e => ({ error: e.message }));
 
   } catch (e) {
